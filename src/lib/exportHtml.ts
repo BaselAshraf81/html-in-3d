@@ -309,6 +309,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#f7f9fb}
 #render-canvas{width:100%;height:100%;display:block;${resolutionStyle}}
 #staging-container{position:absolute;bottom:0;right:0;width:1px;height:1px;overflow:hidden;pointer-events:none}
 .staging{position:absolute;top:0;left:0}
+.staging *{overflow:hidden !important;scrollbar-width:none !important}
+.staging *::-webkit-scrollbar{display:none !important}
 </style>
 ${panelHeadStyles.join("\n")}
 </head>
@@ -793,17 +795,9 @@ canvas.addEventListener('pointerup', (e) => {
     if (!stgCanvas) break;
 
     // --- Manual bounding-rect hit test ---
-    const sc = stagingContainer.style;
-    const saved = { w: sc.width, h: sc.height, ov: sc.overflow,
-      pe: sc.pointerEvents, b: sc.bottom, r: sc.right, t: sc.top, l: sc.left };
-
-    sc.bottom = 'auto'; sc.right = 'auto';
-    sc.top = '0'; sc.left = '0';
-    sc.width = info.width + 'px';
-    sc.height = info.height + 'px';
-    sc.overflow = 'visible';
-    stagingContainer.offsetHeight;
-
+    // The staging canvases have explicit CSS sizes (position:absolute, width/height
+    // in px) so their children have real bounding rects even inside the 1×1
+    // overflow:hidden container. No resize needed.
     const canvasRect = stgCanvas.getBoundingClientRect();
 
     const allEls = stgCanvas.querySelectorAll('*');
@@ -822,10 +816,6 @@ canvas.addEventListener('pointerup', (e) => {
       const ir = targetEl.getBoundingClientRect();
       sliderRect = { left: ir.left - canvasRect.left, width: ir.width };
     }
-
-    sc.width = saved.w; sc.height = saved.h; sc.overflow = saved.ov;
-    sc.pointerEvents = saved.pe; sc.bottom = saved.b; sc.right = saved.r;
-    sc.top = saved.t; sc.left = saved.l;
 
     if (!targetEl) {
       console.log('[click:' + cid + '] NO TARGET at px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
@@ -855,9 +845,18 @@ canvas.addEventListener('pointerup', (e) => {
     const tag = finalTarget.tagName;
     console.log('[click:' + cid + '] TARGET ' + tag + '#' + (finalTarget.id||'') + '.' + (finalTarget.className||'').toString().split(' ')[0] + ' px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
 
+    // Use composed:true MouseEvent with real coordinates for all dispatches.
+    // Real coordinates are critical: Chrome's composited scroll layers inside
+    // layoutsubtree require position-based input routing. Dispatching on a
+    // stored element reference without coordinates bypasses this routing,
+    // causing onclick handlers to be swallowed after scroll layers activate.
+    const clickX = canvasRect.left + _uvX;
+    const clickY = canvasRect.top + _uvY;
+    const synClick = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window, clientX: clickX, clientY: clickY });
+
     if (tag === 'BUTTON' || (tag === 'INPUT' && finalTarget.type === 'submit')) {
-      finalTarget.click();
-      console.log('[click:' + cid + '] → button.click()');
+      finalTarget.dispatchEvent(synClick);
+      console.log('[click:' + cid + '] → button dispatch');
     } else if (tag === 'INPUT' && finalTarget.type === 'checkbox') {
       finalTarget.checked = !finalTarget.checked;
       finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
@@ -880,11 +879,9 @@ canvas.addEventListener('pointerup', (e) => {
       finalTarget.dispatchEvent(new Event('input', { bubbles: true }));
       finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
     } else if (tag === 'LABEL') {
-      finalTarget.click();
+      finalTarget.dispatchEvent(synClick);
     } else {
-      // For non-interactive elements, dispatch click which bubbles up
-      // and may trigger onclick handlers on ancestors
-      finalTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      finalTarget.dispatchEvent(synClick);
       console.log('[click:' + cid + '] → generic dispatch');
     }
 
