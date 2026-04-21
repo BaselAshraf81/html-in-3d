@@ -39,9 +39,14 @@ export function discoverMeshNodes(scene: THREE.Group): GltfMeshNode[] {
       const geo = mesh.geometry;
       const meshName = mesh.name || `Mesh_${meshes.length}`;
 
+      // Extract original material color for environment/decorative mode
+      let originalColor = "#e1e9ee";
+      const mat = mesh.material;
+      if (mat && !Array.isArray(mat) && (mat as THREE.MeshStandardMaterial).color) {
+        originalColor = "#" + (mat as THREE.MeshStandardMaterial).color.getHexString();
+      }
+
       // Extract lean geometry — keeps all triangles but strips to position + normal + uv only.
-      // Drops tangents, morph targets, skinning, vertex colors, etc.
-      // The full shape is preserved; back-face culling only happens at export time.
       let shell;
       try {
         const result = extractLeanGeometry(geo);
@@ -52,7 +57,6 @@ export function discoverMeshNodes(scene: THREE.Group): GltfMeshNode[] {
         );
       } catch (err) {
         console.warn(`[Import] Shell extraction failed for ${meshName}, using raw geometry:`, err);
-        // Fallback: serialize the original geometry
         const pos = geo.attributes.position as THREE.BufferAttribute;
         const norm = geo.attributes.normal as THREE.BufferAttribute | undefined;
         const uv = geo.attributes.uv as THREE.BufferAttribute | undefined;
@@ -71,6 +75,7 @@ export function discoverMeshNodes(scene: THREE.Group): GltfMeshNode[] {
         meshName,
         vertexCount: shell.vertexCount,
         shell,
+        originalColor,
       });
     }
   });

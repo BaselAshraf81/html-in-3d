@@ -17,6 +17,7 @@ export default function Viewport() {
   const selectObject = useStore((s) => s.selectObject);
   const selectGltf = useStore((s) => s.selectGltf);
   const closeContextMenu = useStore((s) => s.closeContextMenu);
+  const toolMode = useStore((s) => s.toolMode);
   const textureMap = useHtmlTextures();
 
   const handlePointerMissed = useCallback(() => {
@@ -29,10 +30,11 @@ export default function Viewport() {
     <GltfDropZone>
       <div
         className="w-full h-full relative grid-bg"
+        style={toolMode === "pointer" ? { cursor: "crosshair" } : undefined}
         onContextMenu={(e) => e.preventDefault()}
       >
         <Canvas
-          camera={{ position: [5, 4, 5], fov: 50, near: 0.1, far: 1000 }}
+          camera={{ position: [5, 4, 5], fov: 50, near: 0.01, far: 2000 }}
           onPointerMissed={handlePointerMissed}
           gl={{ antialias: true, alpha: false }}
           style={{ background: "#f7f9fb" }}
@@ -71,8 +73,10 @@ export default function Viewport() {
               makeDefault
               enableDamping
               dampingFactor={0.1}
-              minDistance={1}
-              maxDistance={100}
+              minDistance={0.1}
+              maxDistance={500}
+              panSpeed={1.5}
+              zoomSpeed={1.2}
             />
           </HtmlTextureContext.Provider>
         </Canvas>

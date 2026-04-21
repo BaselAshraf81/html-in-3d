@@ -3,7 +3,7 @@ import { initUndoRedo, pushSnapshot, undo, redo } from "./undoRedo";
 
 export type MeshType = "box" | "sphere" | "plane" | "cylinder" | "torus" | "cone";
 export type TransformMode = "translate" | "rotate" | "scale";
-export type ToolMode = "select" | "translate" | "rotate" | "scale" | "geometry" | "material";
+export type ToolMode = "pointer" | "select" | "translate" | "rotate" | "scale" | "geometry" | "material";
 
 export interface SceneObject {
   id: string;
@@ -35,7 +35,11 @@ export interface GltfMeshNode {
   vertexCount: number;
   /** Shell geometry extracted at import time — only front-facing triangles with projected UVs */
   shell: ShellGeometryData;
+  /** Original material color from the GLTF, preserved for environment/decorative mode */
+  originalColor?: string;
 }
+
+export type GltfImportMode = "texturable" | "environment";
 
 export interface GltfModel {
   id: string;
@@ -49,6 +53,8 @@ export interface GltfModel {
   visible: boolean;
   locked: boolean;
   expanded: boolean; // UI state for hierarchy
+  /** Import mode: "texturable" = stripped for HTML texturing, "environment" = preserves original colors */
+  importMode: GltfImportMode;
 }
 
 // --- HTML Texture types ---
@@ -90,6 +96,8 @@ interface StoreState {
   // GLTF models
   gltfModels: GltfModel[];
   selectedGltfId: string | null;
+  /** Selected mesh within a GLTF model (for per-mesh operations) */
+  selectedMeshName: string | null;
 
   // HTML texture panels & assignments
   htmlPanels: HtmlPanel[];
@@ -120,9 +128,10 @@ interface StoreState {
   duplicateObject: (id: string) => void;
 
   // GLTF actions
-  addGltfModel: (model: Omit<GltfModel, "id" | "position" | "rotation" | "scale" | "visible" | "locked" | "expanded">) => void;
+  addGltfModel: (model: Omit<GltfModel, "id" | "position" | "rotation" | "scale" | "visible" | "locked" | "expanded"> & { importMode?: GltfImportMode }) => void;
   removeGltfModel: (id: string) => void;
   selectGltf: (id: string | null) => void;
+  selectMesh: (gltfId: string, meshName: string | null) => void;
   updateGltfTransform: (
     id: string,
     transform: Partial<Pick<GltfModel, "position" | "rotation" | "scale">>
@@ -172,6 +181,7 @@ export const useStore = create<StoreState>((set, get) => ({
   selectedObjectId: null,
   gltfModels: [],
   selectedGltfId: null,
+  selectedMeshName: null,
   htmlPanels: [],
   textureAssignments: [],
   selectedPanelId: null,
@@ -212,7 +222,7 @@ export const useStore = create<StoreState>((set, get) => ({
         state.selectedObjectId === id ? null : state.selectedObjectId,
     })),
 
-  selectObject: (id) => set({ selectedObjectId: id, selectedGltfId: null }),
+  selectObject: (id) => set({ selectedObjectId: id, selectedGltfId: null, selectedMeshName: null }),
 
   updateObjectTransform: (id, transform) =>
     set((state) => ({
@@ -272,11 +282,13 @@ export const useStore = create<StoreState>((set, get) => ({
       visible: true,
       locked: false,
       expanded: true,
+      importMode: model.importMode ?? "texturable",
     };
     set((state) => ({
       gltfModels: [...state.gltfModels, newModel],
       selectedGltfId: id,
       selectedObjectId: null,
+      selectedMeshName: null,
     }));
   },
 
@@ -287,7 +299,9 @@ export const useStore = create<StoreState>((set, get) => ({
       selectedGltfId: state.selectedGltfId === id ? null : state.selectedGltfId,
     })),
 
-  selectGltf: (id) => set({ selectedGltfId: id, selectedObjectId: null }),
+  selectGltf: (id) => set({ selectedGltfId: id, selectedObjectId: null, selectedMeshName: null }),
+
+  selectMesh: (gltfId, meshName) => set({ selectedGltfId: gltfId, selectedMeshName: meshName, selectedObjectId: null }),
 
   updateGltfTransform: (id, transform) =>
     set((state) => ({
@@ -357,9 +371,22 @@ export const useStore = create<StoreState>((set, get) => ({
       uvRotation: 0,
       mappingMode: "projected",
     };
-    set((state) => ({
-      textureAssignments: [...state.textureAssignments, assignment],
-    }));
+    set((state) => {
+      // Remove conflicting assignments:
+      // - If assigning to a specific mesh, remove any existing assignment for that same mesh
+      // - If assigning to whole model (no meshName), remove all per-mesh assignments for this model+panel
+      const filtered = state.textureAssignments.filter((a) => {
+        if (a.targetId !== targetId || a.panelId !== panelId) return true;
+        if (meshName) {
+          // Per-mesh: remove existing assignment for this exact mesh
+          return a.meshName !== meshName;
+        } else {
+          // Whole-model: remove all per-mesh assignments for this model+panel
+          return a.targetId !== targetId;
+        }
+      });
+      return { textureAssignments: [...filtered, assignment] };
+    });
     return id;
   },
 
@@ -425,11 +452,15 @@ export const useStore = create<StoreState>((set, get) => ({
   loadProjectData: (data) => {
     set({
       objects: data.objects,
-      gltfModels: data.gltfModels,
+      gltfModels: data.gltfModels.map((m) => ({
+        ...m,
+        importMode: m.importMode ?? "texturable",
+      })),
       htmlPanels: data.htmlPanels,
       textureAssignments: data.textureAssignments,
       selectedObjectId: null,
       selectedGltfId: null,
+      selectedMeshName: null,
       selectedPanelId: null,
       contextMenu: null,
     });

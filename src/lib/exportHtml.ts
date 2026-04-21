@@ -145,14 +145,18 @@ function scopeStyleTag(styleTag: string, scopeSelector: string): string {
 }
 
 /**
- * Wrap inline <script> tags in IIFEs to isolate their scope.
- * This prevents variable collisions between panel scripts and the export's
- * own Three.js script (e.g. both declaring `const canvas`).
+ * Wrap module <script> tags in async IIFEs to isolate their scope and
+ * prevent `const`/`let` collisions between panel module scripts.
  *
- * - Regular inline scripts: wrapped in `(function(){...})()`
- * - Module scripts: converted to regular scripts with IIFE wrapper
- *   (modules inside <canvas> elements may not execute reliably)
- * - External scripts (with src=): left untouched
+ * Regular (non-module) scripts are LEFT UNTOUCHED — their functions must
+ * remain in the global scope so inline event handlers (onclick="inc()")
+ * can call them. Regular scripts don't collide with the export's own
+ * <script type="module"> since modules have their own scope.
+ *
+ * Only module scripts need wrapping because:
+ * - They may declare `const canvas` etc. that collides with other modules
+ * - They use top-level `await` which needs an async wrapper
+ * - Converting them to regular scripts with async IIFE preserves behavior
  */
 function wrapScriptsInIIFE(html: string): string {
   return html.replace(
@@ -165,12 +169,13 @@ function wrapScriptsInIIFE(html: string): string {
       // Skip importmap / json scripts
       if (/type\s*=\s*["']importmap["']/i.test(attrs) || /type\s*=\s*["']application\/json["']/i.test(attrs)) return full;
 
-      // Use async IIFE to support top-level await (common in module scripts)
       const isModule = /type\s*=\s*["']module["']/i.test(attrs);
-      // Strip type="module" — convert to regular script with async IIFE
+
+      // Only wrap module scripts — regular scripts need global scope for inline handlers
+      if (!isModule) return full;
+
+      // Convert module to regular script with async IIFE
       const cleanAttrs = attrs.replace(/\s*type\s*=\s*["']module["']/gi, "");
-      // Always use async IIFE: module scripts commonly use top-level await,
-      // and even regular scripts might use it in newer patterns
       return `<script${cleanAttrs}>(async function(){${body}})()</script>`;
     }
   );
@@ -248,7 +253,9 @@ export function generateStandaloneHtml(
 ): string {
   const leanModels = gltfModels.map((m) => ({
     ...m,
-    dataUrl: "",
+    // Environment models keep their dataUrl so the export can load the full GLTF
+    // with original textures. Texturable models don't need it — shell geometry suffices.
+    dataUrl: m.importMode === "environment" ? m.dataUrl : "",
     meshNodes: m.meshNodes.map((n) => ({ ...n, shell: undefined })),
   }));
 
@@ -317,6 +324,7 @@ ${stagingCanvases}
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const SCENE_DATA = ${sceneJson};
 
@@ -411,7 +419,7 @@ for (const panel of SCENE_DATA.panelIds) {
     }
   });
 
-  interactiveMap.set(panel.id, { contentEl, width: panel.width, height: panel.height, meshes: [] });
+  interactiveMap.set(panel.id, { contentEl, width: panel.width, height: panel.height, meshes: [], meshAssignments: new Map(), meshIsGltf: new Map() });
 }
 
 // --- Geometry helpers ---
@@ -560,11 +568,16 @@ function makeAssignmentTexture(panelId, assignment) {
   return tex;
 }
 
-function applyTextureToMesh(mesh, assignment, meshColor) {
+function applyTextureToMesh(mesh, assignment, meshColor, isGltfMesh) {
   const tex = makeAssignmentTexture(assignment.panelId, assignment);
   if (!tex) return;
 
-  if (assignment.mappingMode === 'projected') {
+  // GLTF meshes: always use original UVs (matches preview behavior — GltfSceneObjects
+  // never calls applyPlanarProjection, it just sets the texture on the existing material).
+  // Primitives: use planar projection when mappingMode === 'projected'.
+  const useProjection = assignment.mappingMode === 'projected' && !isGltfMesh;
+
+  if (useProjection) {
     const srcGeo = mesh.geometry;
     const { geo: projGeo, hasFrontBack } = applyPlanarProjection(srcGeo);
     mesh.geometry = projGeo;
@@ -581,11 +594,15 @@ function applyTextureToMesh(mesh, assignment, meshColor) {
     }
   } else {
     mesh.material = new THREE.MeshStandardMaterial({
-      color: '#ffffff', map: tex, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+      color: '#ffffff', map: tex, roughness: 0.3, metalness: 0.05, side: THREE.DoubleSide,
     });
   }
   const info = interactiveMap.get(assignment.panelId);
-  if (info) info.meshes.push(mesh);
+  if (info) {
+    info.meshes.push(mesh);
+    info.meshAssignments.set(mesh, assignment);
+    info.meshIsGltf.set(mesh, isGltfMesh);
+  }
 }
 
 // --- Build primitive objects ---
@@ -599,31 +616,89 @@ for (const obj of SCENE_DATA.objects) {
   mesh.scale.set(...obj.scale);
   mesh.name = obj.name;
   const a = SCENE_DATA.textureAssignments.find(a => a.targetType === 'primitive' && a.targetId === obj.id);
-  if (a) applyTextureToMesh(mesh, a, obj.color);
+  if (a) applyTextureToMesh(mesh, a, obj.color, false);
   scene.add(mesh);
 }
 
 // --- Build GLTF models from stored geometry ---
+// Environment models with dataUrl are loaded asynchronously with full materials.
+// Texturable models use shell geometry.
+const gltfLoadPromises = [];
+
 for (const model of SCENE_DATA.gltfModels) {
   if (!model.visible) continue;
-  const group = new THREE.Group();
-  group.position.set(...model.position);
-  group.rotation.set(...model.rotation);
-  group.scale.set(...model.scale);
 
-  for (const [key, shellData] of Object.entries(SCENE_DATA.shellGeometries)) {
-    const [modelId, meshName] = key.split(':');
-    if (modelId !== model.id) continue;
-    const geo = buildShellGeometry(shellData);
-    const mat = new THREE.MeshStandardMaterial({ color: '#e1e9ee', roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.name = meshName;
-    const a = SCENE_DATA.textureAssignments.find(a => a.targetType === 'gltfMesh' && a.targetId === model.id && a.meshName === meshName);
-    if (a) applyTextureToMesh(mesh, a, '#e1e9ee');
-    group.add(mesh);
+  if (model.importMode === 'environment' && model.dataUrl) {
+    // Environment model: load full GLTF with original textures
+    const promise = new Promise((resolve) => {
+      const gltfLoader = new GLTFLoader();
+      gltfLoader.load(model.dataUrl, (gltf) => {
+        const group = new THREE.Group();
+        group.position.set(...model.position);
+        group.rotation.set(...model.rotation);
+        group.scale.set(...model.scale);
+        group.add(gltf.scene);
+
+        // Apply HTML textures to specific assigned meshes
+        gltf.scene.traverse((child) => {
+          if (!child.isMesh) return;
+          const meshName = child.name;
+          const perMeshAssignment = SCENE_DATA.textureAssignments.find(
+            a => a.targetType === 'gltfMesh' && a.targetId === model.id && a.meshName === meshName
+          );
+          if (perMeshAssignment) {
+            const origColor = child.material?.color ? '#' + child.material.color.getHexString() : '#e1e9ee';
+            applyTextureToMesh(child, perMeshAssignment, origColor, true);
+          }
+        });
+
+        scene.add(group);
+        resolve();
+      }, undefined, () => resolve());
+    });
+    gltfLoadPromises.push(promise);
+  } else {
+    // Texturable model: build from shell geometry
+    const group = new THREE.Group();
+    group.position.set(...model.position);
+    group.rotation.set(...model.rotation);
+    group.scale.set(...model.scale);
+
+    const wholeModelAssignment = SCENE_DATA.textureAssignments.find(
+      a => a.targetType === 'gltfMesh' && a.targetId === model.id && (a.meshName === undefined || a.meshName === null || a.meshName === '')
+    );
+
+    for (const [key, shellData] of Object.entries(SCENE_DATA.shellGeometries)) {
+      const [modelId, meshName] = key.split(':');
+      if (modelId !== model.id) continue;
+
+      const node = model.meshNodes?.find(n => n.meshName === meshName);
+      const origColor = node?.originalColor || '#e1e9ee';
+
+      const geo = buildShellGeometry(shellData);
+      const mat = new THREE.MeshStandardMaterial({
+        color: origColor, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = meshName;
+
+      const perMeshAssignment = SCENE_DATA.textureAssignments.find(
+        a => a.targetType === 'gltfMesh' && a.targetId === model.id && a.meshName === meshName
+      );
+      const assignment = perMeshAssignment || wholeModelAssignment;
+      if (assignment) {
+        applyTextureToMesh(mesh, assignment, origColor, true);
+      }
+      group.add(mesh);
+    }
+    scene.add(group);
   }
-  scene.add(group);
 }
+
+// Wait for all environment GLTF models to load before starting render
+Promise.all(gltfLoadPromises).then(() => {
+  console.log('[VibeCanvas] All environment models loaded');
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Interactivity: Raycasting → UV → Hit-test
@@ -640,6 +715,7 @@ const pointer = new THREE.Vector2();
 const stagingContainer = document.getElementById('staging-container');
 
 let _downX = 0, _downY = 0, _downTime = 0;
+let _clickId = 0;
 canvas.addEventListener('pointerdown', (e) => {
   _downX = e.clientX; _downY = e.clientY; _downTime = performance.now();
 });
@@ -648,7 +724,12 @@ canvas.addEventListener('pointerup', (e) => {
   const dy = e.clientY - _downY;
   const dist = Math.sqrt(dx * dx + dy * dy);
   const elapsed = performance.now() - _downTime;
-  if (dist > 5 || elapsed > 400) return;
+  _clickId++;
+  const cid = _clickId;
+  if (dist > 8 || elapsed > 600) {
+    console.log('[click:' + cid + '] REJECTED drag dist=' + dist.toFixed(1) + ' elapsed=' + elapsed.toFixed(0) + 'ms');
+    return;
+  }
 
   const rect = canvas.getBoundingClientRect();
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -659,95 +740,160 @@ canvas.addEventListener('pointerup', (e) => {
 
   raycaster.setFromCamera(pointer, camera);
   const intersects = raycaster.intersectObjects(allMeshes, false);
-  if (intersects.length === 0) return;
+  if (intersects.length === 0) {
+    console.log('[click:' + cid + '] NO HIT meshCount=' + allMeshes.length);
+    return;
+  }
 
   const hit = intersects[0];
-  if (!hit.uv) return;
+  if (!hit.uv) {
+    console.log('[click:' + cid + '] HIT but NO UV on', hit.object.name);
+    return;
+  }
+  console.log('[click:' + cid + '] HIT', hit.object.name, 'rawUV=(' + hit.uv.x.toFixed(3) + ',' + hit.uv.y.toFixed(3) + ')');
 
   for (const [panelId, info] of interactiveMap.entries()) {
     if (!info.meshes.includes(hit.object)) continue;
 
-    const uvX = hit.uv.x * info.width;
-    const uvY = (1 - hit.uv.y) * info.height;
+    // Map raycast UV to content pixel coordinates using the texture's own matrix.
+    // This is the exact same transform the GPU shader applies, so the result
+    // matches what the user visually sees — regardless of offset, repeat,
+    // rotation, center, or the mesh's UV convention.
+    const hitMesh = hit.object;
+    const hitMat = Array.isArray(hitMesh.material) ? hitMesh.material[0] : hitMesh.material;
+    const hitTex = hitMat && hitMat.map;
+
+    let _uvX, _uvY;
+    if (hitTex) {
+      hitTex.updateMatrix();
+      const vec = new THREE.Vector3(hit.uv.x, hit.uv.y, 1);
+      vec.applyMatrix3(hitTex.matrix);
+      const fract = (v) => v - Math.floor(v);
+      const texU = fract(vec.x);
+      const texV = fract(vec.y);
+      _uvX = texU * info.width;
+      // Account for flipY: CanvasTexture defaults to flipY=true, which flips
+      // the image vertically on GPU upload. The matrix output is in pre-flip
+      // texture space, so texV=0 maps to the bottom of the flipped image
+      // (= top of the original canvas/HTML content). CSS Y=0 is top.
+      _uvY = hitTex.flipY ? (1 - texV) * info.height : texV * info.height;
+    } else {
+      // Fallback: no texture (shouldn't happen for interactive meshes)
+      const isGltf = info.meshIsGltf.get(hit.object);
+      _uvX = hit.uv.x * info.width;
+      _uvY = isGltf ? hit.uv.y * info.height : (1 - hit.uv.y) * info.height;
+    }
+
+    console.log('[click:' + cid + '] px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
+
+    // Clamp to content bounds
+    if (_uvX < 0 || _uvX >= info.width || _uvY < 0 || _uvY >= info.height) break;
 
     const stgCanvas = document.getElementById('stg-' + panelId);
     if (!stgCanvas) break;
 
-    // Save original styles
+    // --- Manual bounding-rect hit test ---
     const sc = stagingContainer.style;
     const saved = { w: sc.width, h: sc.height, ov: sc.overflow,
       pe: sc.pointerEvents, b: sc.bottom, r: sc.right, t: sc.top, l: sc.left };
 
-    // Move to top-left, expand, make visible
     sc.bottom = 'auto'; sc.right = 'auto';
     sc.top = '0'; sc.left = '0';
     sc.width = info.width + 'px';
     sc.height = info.height + 'px';
     sc.overflow = 'visible';
-    sc.pointerEvents = 'auto';
-    // Hide render canvas so elementFromPoint sees staging content
-    canvas.style.display = 'none';
-    stagingContainer.offsetHeight; // force layout
+    stagingContainer.offsetHeight;
 
-    const cr = stgCanvas.getBoundingClientRect();
-    const absX = cr.left + uvX;
-    const absY = cr.top + uvY;
-    const targetEl = document.elementFromPoint(absX, absY);
+    const canvasRect = stgCanvas.getBoundingClientRect();
 
-    // Restore immediately
-    canvas.style.display = '';
+    const allEls = stgCanvas.querySelectorAll('*');
+    let targetEl = null;
+    for (const el of allEls) {
+      const r = el.getBoundingClientRect();
+      const lx = r.left - canvasRect.left;
+      const ly = r.top - canvasRect.top;
+      if (_uvX >= lx && _uvX < lx + r.width && _uvY >= ly && _uvY < ly + r.height) {
+        targetEl = el;
+      }
+    }
+
+    let sliderRect = null;
+    if (targetEl && targetEl.tagName === 'INPUT' && targetEl.type === 'range') {
+      const ir = targetEl.getBoundingClientRect();
+      sliderRect = { left: ir.left - canvasRect.left, width: ir.width };
+    }
+
     sc.width = saved.w; sc.height = saved.h; sc.overflow = saved.ov;
     sc.pointerEvents = saved.pe; sc.bottom = saved.b; sc.right = saved.r;
     sc.top = saved.t; sc.left = saved.l;
 
-    if (!targetEl || !stagingContainer.contains(targetEl)) break;
+    if (!targetEl) {
+      console.log('[click:' + cid + '] NO TARGET at px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
+      break;
+    }
 
-    const tag = targetEl.tagName;
-    if (tag === 'BUTTON' || (tag === 'INPUT' && targetEl.type === 'submit')) {
-      targetEl.click();
-    } else if (tag === 'INPUT' && targetEl.type === 'checkbox') {
-      targetEl.checked = !targetEl.checked;
-      targetEl.dispatchEvent(new Event('change', { bubbles: true }));
-    } else if (tag === 'INPUT' && targetEl.type === 'radio') {
-      targetEl.checked = true;
-      targetEl.dispatchEvent(new Event('change', { bubbles: true }));
-    } else if (tag === 'SELECT') {
-      const cnt = targetEl.options.length;
-      if (cnt > 0) {
-        targetEl.selectedIndex = (targetEl.selectedIndex + 1) % cnt;
-        targetEl.dispatchEvent(new Event('change', { bubbles: true }));
+    // If we hit a non-interactive container, try to find the nearest interactive
+    // element: first check children (e.g. a button inside a clicked div),
+    // then walk up to find a parent label/button.
+    const interactiveTags = new Set(['BUTTON','INPUT','SELECT','TEXTAREA','LABEL','A']);
+    let finalTarget = targetEl;
+    if (!interactiveTags.has(finalTarget.tagName)) {
+      // Check if there's an interactive child element nearby
+      const child = finalTarget.querySelector('button, input, select, textarea, label, a');
+      if (child) {
+        finalTarget = child;
+      } else {
+        // Walk up to find interactive parent
+        let p = finalTarget.parentElement;
+        while (p && p !== stgCanvas) {
+          if (interactiveTags.has(p.tagName)) { finalTarget = p; break; }
+          p = p.parentElement;
+        }
       }
-    } else if (tag === 'INPUT' && targetEl.type === 'range') {
-      // Re-expand to get slider bounding rect
-      sc.bottom = 'auto'; sc.right = 'auto'; sc.top = '0'; sc.left = '0';
-      sc.width = info.width + 'px'; sc.height = info.height + 'px';
-      sc.overflow = 'visible'; canvas.style.display = 'none';
-      stagingContainer.offsetHeight;
-      const ir = targetEl.getBoundingClientRect();
-      canvas.style.display = '';
-      sc.width = saved.w; sc.height = saved.h; sc.overflow = saved.ov;
-      sc.pointerEvents = saved.pe; sc.bottom = saved.b; sc.right = saved.r;
-      sc.top = saved.t; sc.left = saved.l;
-      const localX = absX - ir.left;
-      const ratio = Math.max(0, Math.min(1, localX / ir.width));
-      const mn = parseFloat(targetEl.min || '0');
-      const mx = parseFloat(targetEl.max || '100');
-      const st = parseFloat(targetEl.step || '1');
-      targetEl.value = String(Math.round((mn + ratio * (mx - mn)) / st) * st);
-      targetEl.dispatchEvent(new Event('input', { bubbles: true }));
-      targetEl.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    const tag = finalTarget.tagName;
+    console.log('[click:' + cid + '] TARGET ' + tag + '#' + (finalTarget.id||'') + '.' + (finalTarget.className||'').toString().split(' ')[0] + ' px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
+
+    if (tag === 'BUTTON' || (tag === 'INPUT' && finalTarget.type === 'submit')) {
+      finalTarget.click();
+      console.log('[click:' + cid + '] → button.click()');
+    } else if (tag === 'INPUT' && finalTarget.type === 'checkbox') {
+      finalTarget.checked = !finalTarget.checked;
+      finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (tag === 'INPUT' && finalTarget.type === 'radio') {
+      finalTarget.checked = true;
+      finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (tag === 'SELECT') {
+      const cnt = finalTarget.options.length;
+      if (cnt > 0) {
+        finalTarget.selectedIndex = (finalTarget.selectedIndex + 1) % cnt;
+        finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } else if (tag === 'INPUT' && finalTarget.type === 'range' && sliderRect) {
+      const localX = _uvX - sliderRect.left;
+      const ratio = Math.max(0, Math.min(1, localX / sliderRect.width));
+      const mn = parseFloat(finalTarget.min || '0');
+      const mx = parseFloat(finalTarget.max || '100');
+      const st = parseFloat(finalTarget.step || '1');
+      finalTarget.value = String(Math.round((mn + ratio * (mx - mn)) / st) * st);
+      finalTarget.dispatchEvent(new Event('input', { bubbles: true }));
+      finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (tag === 'LABEL') {
+      finalTarget.click();
     } else {
-      // Generic: full mouse event sequence
-      const evtOpts = { bubbles: true, cancelable: true, clientX: absX, clientY: absY, view: window };
-      targetEl.dispatchEvent(new MouseEvent('pointerdown', evtOpts));
-      targetEl.dispatchEvent(new MouseEvent('mousedown', evtOpts));
-      targetEl.dispatchEvent(new MouseEvent('pointerup', evtOpts));
-      targetEl.dispatchEvent(new MouseEvent('mouseup', evtOpts));
-      targetEl.dispatchEvent(new MouseEvent('click', evtOpts));
-      if (targetEl.focus) targetEl.focus({ preventScroll: true });
+      // For non-interactive elements, dispatch click which bubbles up
+      // and may trigger onclick handlers on ancestors
+      finalTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      console.log('[click:' + cid + '] → generic dispatch');
     }
 
     try { stgCanvas.requestPaint?.(); } catch(_) {}
+    // Ensure focus returns to the 3D canvas so subsequent pointer events work
+    if (document.activeElement && stagingContainer.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    console.log('[click:' + cid + '] → requestPaint done');
     break;
   }
 });

@@ -8,6 +8,7 @@ interface ToolButton {
 }
 
 const tools: (ToolButton | "separator")[] = [
+  { mode: "pointer", icon: "arrow_selector_tool", label: "Pointer (mesh select)" },
   { mode: "select", icon: "near_me", label: "Select" },
   "separator",
   { mode: "translate", icon: "open_with", label: "Translate" },

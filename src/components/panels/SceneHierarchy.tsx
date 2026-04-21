@@ -15,6 +15,9 @@ export default function SceneHierarchy() {
   const removeGltfModel = useStore((s) => s.removeGltfModel);
   const duplicateGltfModel = useStore((s) => s.duplicateGltfModel);
   const toggleGltfExpanded = useStore((s) => s.toggleGltfExpanded);
+  const openContextMenu = useStore((s) => s.openContextMenu);
+  const selectMesh = useStore((s) => s.selectMesh);
+  const selectedMeshName = useStore((s) => s.selectedMeshName);
   const snapshot = useStore((s) => s.snapshot);
 
   return (
@@ -258,22 +261,49 @@ export default function SceneHierarchy() {
 
                 {/* GLTF mesh children */}
                 {model.expanded &&
-                  model.meshNodes.map((mesh) => (
-                    <div
-                      key={mesh.uuid}
-                      className="flex items-center gap-2 px-2 py-1.5 pl-10 rounded cursor-default hover:bg-surface-container-highest"
-                    >
-                      <span className="material-symbols-outlined text-xs text-on-surface-variant invisible">
-                        arrow_right
-                      </span>
-                      <span className="material-symbols-outlined text-xs text-on-surface-variant">
-                        category
-                      </span>
-                      <span className="text-on-surface-variant text-sm truncate flex-1">
-                        {mesh.name}
-                      </span>
-                    </div>
-                  ))}
+                  model.meshNodes.map((mesh) => {
+                    const isMeshSelected = selectedGltfId === model.id && selectedMeshName === mesh.meshName;
+                    return (
+                      <div
+                        key={mesh.uuid}
+                        className={`flex items-center gap-2 px-2 py-1.5 pl-10 rounded cursor-pointer group transition-colors ${
+                          isMeshSelected
+                            ? "bg-secondary-container/40 border-l-2 border-secondary"
+                            : "hover:bg-surface-container-highest"
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectMesh(model.id, isMeshSelected ? null : mesh.meshName);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          selectMesh(model.id, mesh.meshName);
+                          openContextMenu(e.clientX, e.clientY, "gltfMesh", model.id, mesh.meshName);
+                        }}
+                      >
+                        <span className="material-symbols-outlined text-xs text-on-surface-variant invisible">
+                          arrow_right
+                        </span>
+                        <span className={`material-symbols-outlined text-xs ${isMeshSelected ? "text-secondary" : "text-on-surface-variant"}`}>
+                          category
+                        </span>
+                        <span className={`text-sm truncate flex-1 ${isMeshSelected ? "text-secondary font-medium" : "text-on-surface-variant"}`}>
+                          {mesh.name}
+                        </span>
+                        {mesh.originalColor && (
+                          <span
+                            className="w-3 h-3 rounded-sm border border-outline-variant/30 flex-shrink-0"
+                            style={{ backgroundColor: mesh.originalColor }}
+                            title={mesh.originalColor}
+                          />
+                        )}
+                        <span className="text-[10px] font-mono text-on-surface-variant/40">
+                          {mesh.vertexCount}v
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             );
           })}

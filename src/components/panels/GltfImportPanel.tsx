@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { useStore } from "@/store/useStore";
+import { useStore, type GltfImportMode } from "@/store/useStore";
 import {
   fileToDataUrl,
   loadGltfFromDataUrl,
@@ -19,6 +19,7 @@ export default function GltfImportPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [importMode, setImportMode] = useState<GltfImportMode>("texturable");
 
   const handleImport = useCallback(
     async (file: File) => {
@@ -28,12 +29,14 @@ export default function GltfImportPanel() {
         const dataUrl = await fileToDataUrl(file);
         const gltf = await loadGltfFromDataUrl(dataUrl);
         const meshNodes = discoverMeshNodes(gltf.scene);
-        // Shell geometry is extracted at import time — dataUrl is no longer needed
         addGltfModel({
           name: file.name.replace(/\.(glb|gltf)$/i, ""),
           fileName: file.name,
-          dataUrl: "",
+          // Environment mode keeps dataUrl so the GLTF can be re-loaded with textures.
+          // Texturable mode discards it — shell geometry is sufficient.
+          dataUrl: importMode === "environment" ? dataUrl : "",
           meshNodes,
+          importMode,
         });
       } catch (err) {
         console.error("GLTF import failed:", err);
@@ -41,7 +44,7 @@ export default function GltfImportPanel() {
         setIsLoading(false);
       }
     },
-    [addGltfModel]
+    [addGltfModel, importMode]
   );
 
   const onDrop = useCallback(
@@ -80,6 +83,38 @@ export default function GltfImportPanel() {
       </div>
 
       <div className="p-4 flex-1 overflow-y-auto flex flex-col gap-6">
+        {/* Import Mode Selector */}
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-on-surface-variant font-medium">Import as:</span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setImportMode("texturable")}
+              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                importMode === "texturable"
+                  ? "bg-primary/15 text-primary border border-primary/30"
+                  : "bg-surface-container-highest text-on-surface-variant hover:text-on-surface border border-transparent"
+              }`}
+            >
+              Texturable
+            </button>
+            <button
+              onClick={() => setImportMode("environment")}
+              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                importMode === "environment"
+                  ? "bg-primary/15 text-primary border border-primary/30"
+                  : "bg-surface-container-highest text-on-surface-variant hover:text-on-surface border border-transparent"
+              }`}
+            >
+              Environment
+            </button>
+          </div>
+        </div>
+        <p className="text-[10px] text-on-surface-variant/70 leading-tight">
+          {importMode === "texturable"
+            ? "Meshes can receive HTML textures. Right-click meshes to assign."
+            : "Preserves original model colors. Use as background or decoration."}
+        </p>
+
         {/* Drop Zone */}
         <div
           onDrop={onDrop}
@@ -159,10 +194,19 @@ export default function GltfImportPanel() {
                           >
                             {model.name}
                           </p>
-                          <p className="text-xs text-on-surface-variant">
-                            {model.meshNodes.length} mesh
-                            {model.meshNodes.length !== 1 ? "es" : ""}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-on-surface-variant">
+                              {model.meshNodes.length} mesh
+                              {model.meshNodes.length !== 1 ? "es" : ""}
+                            </p>
+                            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                              model.importMode === "environment"
+                                ? "bg-amber-500/10 text-amber-600"
+                                : "bg-primary/10 text-primary"
+                            }`}>
+                              {model.importMode === "environment" ? "ENV" : "TEX"}
+                            </span>
+                          </div>
                         </div>
                         <div className="flex items-center gap-1">
                           {/* Visibility */}
