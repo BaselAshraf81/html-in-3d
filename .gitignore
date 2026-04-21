@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# IDE / Editor
+.vscode/
+.kiro/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project exports & saves
+*.vibecanvas
+vibecanvas-export*.html
+
+# Test / scratch files
+test3dglb/
+temp.*
+
+# Reference & design docs (large, not needed for build)
+ignore/

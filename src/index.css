@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+@theme {
+  /* Design System Colors from DESIGN.md */
+  --color-background: #f7f9fb;
+  --color-surface: #f7f9fb;
+  --color-surface-bright: #f7f9fb;
+  --color-surface-dim: #cfdce3;
+  --color-surface-container: #e8eff3;
+  --color-surface-container-low: #f0f4f7;
+  --color-surface-container-high: #e1e9ee;
+  --color-surface-container-highest: #d9e4ea;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-variant: #d9e4ea;
+
+  --color-on-surface: #2a3439;
+  --color-on-surface-variant: #566166;
+  --color-on-background: #2a3439;
+  --color-inverse-surface: #0b0f10;
+  --color-inverse-on-surface: #9a9d9f;
+
+  --color-primary: #0053db;
+  --color-primary-dim: #0048c1;
+  --color-primary-container: #dbe1ff;
+  --color-primary-fixed: #dbe1ff;
+  --color-primary-fixed-dim: #c7d3ff;
+  --color-on-primary: #f8f7ff;
+  --color-on-primary-container: #0048bf;
+  --color-on-primary-fixed: #003798;
+  --color-on-primary-fixed-variant: #0050d4;
+  --color-inverse-primary: #618bff;
+  --color-surface-tint: #0053db;
+
+  --color-secondary: #5f5f62;
+  --color-secondary-dim: #535356;
+  --color-secondary-container: #e4e2e6;
+  --color-secondary-fixed: #e4e2e6;
+  --color-secondary-fixed-dim: #d5d3d8;
+  --color-on-secondary: #faf8fc;
+  --color-on-secondary-container: #515155;
+  --color-on-secondary-fixed: #3f3f43;
+  --color-on-secondary-fixed-variant: #5b5b5f;
+
+  --color-tertiary: #625b77;
+  --color-tertiary-dim: #564f6b;
+  --color-tertiary-container: #dfd5f7;
+  --color-tertiary-fixed: #dfd5f7;
+  --color-tertiary-fixed-dim: #d0c7e8;
+  --color-on-tertiary: #fdf7ff;
+  --color-on-tertiary-container: #4f4964;
+  --color-on-tertiary-fixed: #3c3650;
+  --color-on-tertiary-fixed-variant: #59526e;
+
+  --color-error: #9f403d;
+  --color-error-dim: #4e0309;
+  --color-error-container: #fe8983;
+  --color-on-error: #fff7f6;
+  --color-on-error-container: #752121;
+
+  --color-outline: #717c82;
+  --color-outline-variant: #a9b4b9;
+
+  /* Typography */
+  --font-headline: "Inter", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-label: "Inter", sans-serif;
+
+  /* Border Radius - Technical precision */
+  --radius-sm: 0.125rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.5rem;
+}
+
+/* Base styles */
+body {
+  font-family: "Inter", sans-serif;
+  background-color: var(--color-background);
+  color: var(--color-on-surface);
+  margin: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glass morphism utilities */
+.glass-panel {
+  background-color: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.ghost-border {
+  border: 1px solid rgba(169, 180, 185, 0.2);
+}
+
+.soft-focus-shadow {
+  box-shadow: 0px 24px 48px rgba(42, 52, 57, 0.06);
+}
+
+.primary-gradient {
+  background: linear-gradient(135deg, #0053db, #0048c1);
+}
+
+/* Grid background for viewport */
+.grid-bg {
+  background-size: 40px 40px;
+  background-image:
+    linear-gradient(to right, rgba(169, 180, 185, 0.2) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(169, 180, 185, 0.2) 1px, transparent 1px);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+}
+
+/* Material Symbols config */
+.material-symbols-outlined {
+  font-variation-settings: "FILL" 0, "wght" 300, "GRAD" 0, "opsz" 24;
+}

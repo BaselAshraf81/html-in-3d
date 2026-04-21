@@ -1,0 +1,6 @@
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\mingw64\\bin\\gcc.exe"
+rustflags = ["-C", "link-args=-Wl,--exclude-libs,ALL"]
+
+[build]
+target-dir = "target"
