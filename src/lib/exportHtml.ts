@@ -116,7 +116,6 @@ export function generateStandaloneHtml(
 ): string {
   const leanModels = gltfModels.map((m) => ({
     ...m,
-    dataUrl: "",
     meshNodes: m.meshNodes.map((n) => ({ ...n, shell: undefined })),
   }));
 
@@ -165,6 +164,7 @@ ${stagingCanvases}
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const SCENE_DATA = ${sceneJson};
 
@@ -302,9 +302,9 @@ function applyTextureToMesh(mesh, assignment) {
   tex.repeat.set(assignment.uvRepeat[0], assignment.uvRepeat[1]);
   tex.rotation = assignment.uvRotation;
   tex.center.set(0.5, 0.5);
-  mesh.material = new THREE.MeshStandardMaterial({
-    color: '#ffffff', map: tex, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
-  });
+  mesh.material.map = tex;
+  mesh.material.visible = true;
+  mesh.material.needsUpdate = true;
   // Track mesh for raycasting interactivity
   const info = interactiveMap.get(assignment.panelId);
   if (info) info.meshes.push(mesh);
@@ -325,7 +325,8 @@ for (const obj of SCENE_DATA.objects) {
   scene.add(mesh);
 }
 
-// --- Build GLTF models from shell geometry ---
+// --- Build GLTF models: load original + shell overlay for HTML textures ---
+const gltfLoader = new GLTFLoader();
 for (const model of SCENE_DATA.gltfModels) {
   if (!model.visible) continue;
   const group = new THREE.Group();
@@ -333,15 +334,33 @@ for (const model of SCENE_DATA.gltfModels) {
   group.rotation.set(...model.rotation);
   group.scale.set(...model.scale);
 
+  // Load original GLTF with its native materials/colors/textures
+  if (model.dataUrl) {
+    try {
+      const gltf = await new Promise((resolve, reject) => {
+        gltfLoader.load(model.dataUrl, resolve, undefined, reject);
+      });
+      group.add(gltf.scene);
+    } catch(e) {
+      console.warn('Failed to load original GLTF for', model.name, e);
+    }
+  }
+
+  // Add shell overlay meshes for HTML texture assignments
   for (const [key, shellData] of Object.entries(SCENE_DATA.shellGeometries)) {
     const [modelId, meshName] = key.split(':');
     if (modelId !== model.id) continue;
+    const a = SCENE_DATA.textureAssignments.find(a => a.targetType === 'gltfMesh' && a.targetId === model.id && a.meshName === meshName);
+    if (!a) continue; // Only create overlay if there's a texture assignment
     const geo = buildShellGeometry(shellData);
-    const mat = new THREE.MeshStandardMaterial({ color: '#e1e9ee', roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide });
+    const mat = new THREE.MeshBasicMaterial({
+      side: THREE.DoubleSide, transparent: true, depthWrite: false, visible: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = meshName;
-    const a = SCENE_DATA.textureAssignments.find(a => a.targetType === 'gltfMesh' && a.targetId === model.id && a.meshName === meshName);
-    if (a) applyTextureToMesh(mesh, a);
+    mesh.renderOrder = 1;
+    applyTextureToMesh(mesh, a);
     group.add(mesh);
   }
   scene.add(group);

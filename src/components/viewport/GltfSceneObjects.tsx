@@ -1,14 +1,18 @@
-import { useEffect, useRef, useMemo, useCallback } from "react";
+import { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import * as THREE from "three";
 import { ThreeEvent, useFrame } from "@react-three/fiber";
 import { useStore, type GltfModel } from "@/store/useStore";
 import { useHtmlTextureMap } from "@/contexts/HtmlTextureContext";
+import { loadGltfFromDataUrl } from "@/lib/gltfLoader";
 import { deserializeShellGeometry } from "@/lib/meshOptimizer";
 
 /**
- * Renders a GLTF model from its stored shell geometry data.
- * No GLTF re-loading — meshes are reconstructed from the compact
- * position/normal/uv arrays extracted at import time.
+ * Renders a GLTF model in two layers:
+ * 1. The original GLTF scene with its native materials/colors/textures
+ * 2. A transparent shell overlay for any assigned HTML textures
+ *
+ * This preserves the original look of the GLB while allowing HTML
+ * content to be projected onto specific surfaces.
  */
 function GltfModelObject({ model }: { model: GltfModel }) {
   const groupRef = useRef<THREE.Group>(null);
@@ -18,25 +22,70 @@ function GltfModelObject({ model }: { model: GltfModel }) {
   const isSelected = selectedGltfId === model.id;
   const textureMap = useHtmlTextureMap();
 
-  // Build Three.js geometries from stored shell data (once, memoized)
-  const meshEntries = useMemo(() => {
+  // Load and cache the original GLTF scene
+  const [originalScene, setOriginalScene] = useState<THREE.Group | null>(null);
+
+  useEffect(() => {
+    if (!model.dataUrl) return;
+    let cancelled = false;
+    loadGltfFromDataUrl(model.dataUrl).then((gltf) => {
+      if (cancelled) return;
+      // Clone the scene so each instance is independent
+      const scene = gltf.scene.clone(true);
+      setOriginalScene(scene);
+    }).catch((err) => {
+      console.warn("[GltfSceneObjects] Failed to load original GLTF:", err);
+    });
+    return () => { cancelled = true; };
+  }, [model.dataUrl]);
+
+  // Build shell overlay geometries for HTML texture assignments
+  const shellEntries = useMemo(() => {
     return model.meshNodes.map((node) => ({
       name: node.meshName,
       geometry: deserializeShellGeometry(node.shell),
     }));
   }, [model.meshNodes]);
 
-  // Apply textures and selection highlight
+  // Check if any mesh in this model has an HTML texture assigned
+  const hasAnyTexture = useMemo(() => {
+    return model.meshNodes.some((node) => {
+      const key = `${model.id}:${node.meshName}`;
+      return textureMap.has(key);
+    });
+  }, [model.id, model.meshNodes, textureMap]);
+
+  // Apply selection highlight to original scene meshes
+  useEffect(() => {
+    if (!originalScene) return;
+    originalScene.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+      const mat = (child as THREE.Mesh).material;
+      const applyEmissive = (m: THREE.Material) => {
+        if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial) {
+          m.emissive.set(isSelected ? "#0053db" : "#000000");
+          m.emissiveIntensity = isSelected ? 0.08 : 0;
+        }
+      };
+      if (Array.isArray(mat)) mat.forEach(applyEmissive);
+      else applyEmissive(mat);
+    });
+  }, [originalScene, isSelected]);
+
+  // Update overlay textures
   useEffect(() => {
     const group = groupRef.current;
     if (!group) return;
 
-    group.children.forEach((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      const mesh = child;
+    // Find overlay meshes (they have the "overlay-" prefix in userData)
+    group.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+      const mesh = child as THREE.Mesh;
+      if (!mesh.userData.isOverlay) return;
+
       const key = `${model.id}:${mesh.name}`;
       const entry = textureMap.get(key);
-      const mat = mesh.material as THREE.MeshStandardMaterial;
+      const mat = mesh.material as THREE.MeshBasicMaterial;
 
       if (entry) {
         const tex = entry.texture;
@@ -47,34 +96,23 @@ function GltfModelObject({ model }: { model: GltfModel }) {
         tex.wrapS = THREE.ClampToEdgeWrapping;
         tex.wrapT = THREE.ClampToEdgeWrapping;
         mat.map = tex;
-        mat.color.set("#ffffff");
-        mat.roughness = 0.95;
-        mat.metalness = 0;
-        mat.side = THREE.DoubleSide;
+        mat.visible = true;
         mat.needsUpdate = true;
-      } else if (mat.map) {
+      } else {
         mat.map = null;
-        mat.side = THREE.DoubleSide;
+        mat.visible = false;
         mat.needsUpdate = true;
-      }
-
-      if (mat.emissive) {
-        mat.emissive.set(isSelected ? "#0053db" : "#000000");
-        mat.emissiveIntensity = isSelected ? 0.08 : 0;
       }
     });
-  }, [isSelected, textureMap, model.id]);
+  }, [textureMap, model.id]);
 
   // Keep textures updating each frame
   useFrame(() => {
-    const group = groupRef.current;
-    if (!group) return;
-    group.children.forEach((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      const key = `${model.id}:${child.name}`;
+    for (const node of model.meshNodes) {
+      const key = `${model.id}:${node.meshName}`;
       const entry = textureMap.get(key);
       if (entry) entry.texture.needsUpdate = true;
-    });
+    }
   });
 
   const handleClick = useCallback(
@@ -110,12 +148,25 @@ function GltfModelObject({ model }: { model: GltfModel }) {
       onClick={handleClick}
       onContextMenu={handleContextMenu}
     >
-      {meshEntries.map((entry) => (
-        <mesh key={entry.name} name={entry.name} geometry={entry.geometry}>
-          <meshStandardMaterial
-            color="#e1e9ee"
-            roughness={0.6}
-            metalness={0.1}
+      {/* Layer 1: Original GLTF with native materials */}
+      {originalScene && <primitive object={originalScene} />}
+
+      {/* Layer 2: Shell overlay — invisible until HTML texture assigned */}
+      {shellEntries.map((entry) => (
+        <mesh
+          key={`overlay-${entry.name}`}
+          name={entry.name}
+          geometry={entry.geometry}
+          userData={{ isOverlay: true }}
+          renderOrder={1}
+        >
+          <meshBasicMaterial
+            visible={false}
+            transparent
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
             side={THREE.DoubleSide}
           />
         </mesh>

@@ -28,11 +28,12 @@ export default function GltfImportPanel() {
         const dataUrl = await fileToDataUrl(file);
         const gltf = await loadGltfFromDataUrl(dataUrl);
         const meshNodes = discoverMeshNodes(gltf.scene);
-        // Shell geometry is extracted at import time — dataUrl is no longer needed
+        // Keep dataUrl so the original GLTF can be rendered with its materials.
+        // Shell geometry is used only for the HTML texture overlay.
         addGltfModel({
           name: file.name.replace(/\.(glb|gltf)$/i, ""),
           fileName: file.name,
-          dataUrl: "",
+          dataUrl,
           meshNodes,
         });
       } catch (err) {

@@ -23,57 +23,125 @@ export function loadGltfFromDataUrl(dataUrl: string): Promise<GLTF> {
 }
 
 /**
- * Traverse a GLTF scene, discover all mesh nodes, and extract lightweight
- * shell geometry for each mesh at import time.
+ * Traverse a GLTF scene, discover all mesh nodes, merge them into a single
+ * combined geometry, and extract lightweight shell data.
  *
- * Shell extraction keeps only front-facing triangles with projected UVs,
- * dramatically reducing memory footprint (a 32MB model → a few hundred KB).
- * The heavy original GLTF data can then be discarded.
+ * Merging ensures the entire model is treated as one surface for texture
+ * projection — no split materials, no per-mesh assignment needed.
+ * All mesh transforms are baked relative to the GLTF scene root so the
+ * shell aligns with the original model when both are rendered in the same group.
  */
 export function discoverMeshNodes(scene: THREE.Group): GltfMeshNode[] {
-  const meshes: GltfMeshNode[] = [];
+  const allMeshes: THREE.Mesh[] = [];
+  scene.updateWorldMatrix(true, true);
   scene.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
-      const mesh = child as THREE.Mesh;
-      const geo = mesh.geometry;
-      const meshName = mesh.name || `Mesh_${meshes.length}`;
-
-      // Extract lean geometry — keeps all triangles but strips to position + normal + uv only.
-      // Drops tangents, morph targets, skinning, vertex colors, etc.
-      // The full shape is preserved; back-face culling only happens at export time.
-      let shell;
-      try {
-        const result = extractLeanGeometry(geo);
-        shell = serializeShellGeometry(result.geometry);
-        console.log(
-          `[Import] ${meshName}: ${result.keptTriangles} tris, stripped to pos+norm+uv ` +
-          `(saved ~${(result.savedBytes / 1024).toFixed(0)}KB)`
-        );
-      } catch (err) {
-        console.warn(`[Import] Shell extraction failed for ${meshName}, using raw geometry:`, err);
-        // Fallback: serialize the original geometry
-        const pos = geo.attributes.position as THREE.BufferAttribute;
-        const norm = geo.attributes.normal as THREE.BufferAttribute | undefined;
-        const uv = geo.attributes.uv as THREE.BufferAttribute | undefined;
-        shell = {
-          position: Array.from((pos.array as Float32Array)),
-          normal: norm ? Array.from((norm.array as Float32Array)) : [],
-          uv: uv ? Array.from((uv.array as Float32Array)) : [],
-          index: geo.index ? Array.from(geo.index.array) : [],
-          vertexCount: pos.count,
-        };
-      }
-
-      meshes.push({
-        name: meshName,
-        uuid: mesh.uuid,
-        meshName,
-        vertexCount: shell.vertexCount,
-        shell,
-      });
+      allMeshes.push(child as THREE.Mesh);
     }
   });
-  return meshes;
+
+  if (allMeshes.length === 0) return [];
+
+  // Merge all meshes into one, baking transforms relative to scene root
+  try {
+    const merged = mergeGltfMeshes(allMeshes, scene);
+    const meshName = "Merged_Mesh";
+
+    let shell;
+    try {
+      const result = extractLeanGeometry(merged);
+      shell = serializeShellGeometry(result.geometry);
+      console.log(
+        `[Import] ${meshName}: merged ${allMeshes.length} meshes → ${result.keptTriangles} tris`
+      );
+    } catch (err) {
+      console.warn(`[Import] Lean extraction failed for merged mesh, using raw:`, err);
+      const pos = merged.attributes.position as THREE.BufferAttribute;
+      const norm = merged.attributes.normal as THREE.BufferAttribute | undefined;
+      const uv = merged.attributes.uv as THREE.BufferAttribute | undefined;
+      shell = {
+        position: Array.from(pos.array as Float32Array),
+        normal: norm ? Array.from(norm.array as Float32Array) : [],
+        uv: uv ? Array.from(uv.array as Float32Array) : [],
+        index: merged.index ? Array.from(merged.index.array) : [],
+        vertexCount: pos.count,
+      };
+    }
+
+    return [{
+      name: meshName,
+      uuid: crypto.randomUUID(),
+      meshName,
+      vertexCount: shell.vertexCount,
+      shell,
+    }];
+  } catch (err) {
+    console.warn(`[Import] Merge failed:`, err);
+    return [];
+  }
+}
+
+/**
+ * Merge GLTF meshes into a single BufferGeometry.
+ * Transforms are baked relative to the scene root so the result
+ * aligns with the original GLTF when rendered in the same parent group.
+ */
+function mergeGltfMeshes(meshes: THREE.Mesh[], sceneRoot: THREE.Group): THREE.BufferGeometry {
+  const rootInverse = new THREE.Matrix4().copy(sceneRoot.matrixWorld).invert();
+
+  let totalVerts = 0;
+  const geos: { pos: Float32Array; norm: Float32Array | null; count: number; relativeMatrix: THREE.Matrix4; normalMatrix: THREE.Matrix3 }[] = [];
+
+  for (const mesh of meshes) {
+    const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const norm = geo.attributes.normal as THREE.BufferAttribute | undefined;
+
+    // Transform relative to scene root (not absolute world)
+    const relativeMatrix = new THREE.Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld);
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(relativeMatrix);
+
+    geos.push({
+      pos: pos.array as Float32Array,
+      norm: norm ? (norm.array as Float32Array) : null,
+      count: pos.count,
+      relativeMatrix,
+      normalMatrix,
+    });
+    totalVerts += pos.count;
+  }
+
+  const mergedPos = new Float32Array(totalVerts * 3);
+  const mergedNorm = new Float32Array(totalVerts * 3);
+  const _v = new THREE.Vector3();
+  const _n = new THREE.Vector3();
+
+  let offset = 0;
+  for (const g of geos) {
+    for (let i = 0; i < g.count; i++) {
+      _v.set(g.pos[i * 3], g.pos[i * 3 + 1], g.pos[i * 3 + 2]);
+      _v.applyMatrix4(g.relativeMatrix);
+      mergedPos[(offset + i) * 3] = _v.x;
+      mergedPos[(offset + i) * 3 + 1] = _v.y;
+      mergedPos[(offset + i) * 3 + 2] = _v.z;
+
+      if (g.norm) {
+        _n.set(g.norm[i * 3], g.norm[i * 3 + 1], g.norm[i * 3 + 2]);
+        _n.applyMatrix3(g.normalMatrix).normalize();
+      } else {
+        _n.set(0, 1, 0);
+      }
+      mergedNorm[(offset + i) * 3] = _n.x;
+      mergedNorm[(offset + i) * 3 + 1] = _n.y;
+      mergedNorm[(offset + i) * 3 + 2] = _n.z;
+    }
+    offset += g.count;
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute("position", new THREE.BufferAttribute(mergedPos, 3));
+  merged.setAttribute("normal", new THREE.BufferAttribute(mergedNorm, 3));
+  return merged;
 }
 
 /** Validate that a file is a GLTF/GLB */

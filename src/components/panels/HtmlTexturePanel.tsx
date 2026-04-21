@@ -144,6 +144,7 @@ export default function HtmlTexturePanel() {
 
   // File drop handler for .html files
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const handleHtmlFile = useCallback(
     async (file: File) => {
       const text = await file.text();
@@ -151,6 +152,22 @@ export default function HtmlTexturePanel() {
       const num = panelCounter + 1;
       setPanelCounter(num);
       addHtmlPanel(name, text);
+    },
+    [panelCounter, addHtmlPanel]
+  );
+
+  const handleImageFile = useCallback(
+    async (file: File) => {
+      const dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      const name = file.name.replace(/\.[^.]+$/, "");
+      const num = panelCounter + 1;
+      setPanelCounter(num);
+      const html = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden;"><img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain;" /></div>`;
+      addHtmlPanel(name, html);
     },
     [panelCounter, addHtmlPanel]
   );
@@ -165,6 +182,13 @@ export default function HtmlTexturePanel() {
         </h2>
         <div className="flex items-center gap-1">
           <button
+            onClick={() => imageInputRef.current?.click()}
+            className="text-on-surface-variant hover:text-on-surface p-1 transition-colors"
+            title="Import image as texture"
+          >
+            <span className="material-symbols-outlined text-[16px]">image</span>
+          </button>
+          <button
             onClick={() => fileInputRef.current?.click()}
             className="text-on-surface-variant hover:text-on-surface p-1 transition-colors"
             title="Import .html file"
@@ -178,6 +202,17 @@ export default function HtmlTexturePanel() {
           >
             <span className="material-symbols-outlined text-[16px]">add</span>
           </button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleImageFile(file);
+              e.target.value = "";
+            }}
+            className="hidden"
+          />
           <input
             ref={fileInputRef}
             type="file"
@@ -218,15 +253,24 @@ export default function HtmlTexturePanel() {
               texture
             </span>
             <p className="text-xs text-on-surface-variant">
-              No HTML panels yet. Create one to start assigning HTML textures to meshes.
+              No panels yet. Create an HTML panel or import an image to start texturing meshes.
             </p>
-            <button
-              onClick={handleAddPanel}
-              className="text-xs font-medium text-primary hover:text-primary-dim transition-colors flex items-center gap-1"
-            >
-              <span className="material-symbols-outlined text-[14px]">add</span>
-              New Panel
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleAddPanel}
+                className="text-xs font-medium text-primary hover:text-primary-dim transition-colors flex items-center gap-1"
+              >
+                <span className="material-symbols-outlined text-[14px]">add</span>
+                New Panel
+              </button>
+              <button
+                onClick={() => imageInputRef.current?.click()}
+                className="text-xs font-medium text-primary hover:text-primary-dim transition-colors flex items-center gap-1"
+              >
+                <span className="material-symbols-outlined text-[14px]">image</span>
+                Import Image
+              </button>
+            </div>
           </div>
         ) : (
           <>
