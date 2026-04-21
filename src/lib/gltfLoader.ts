@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import type { GltfMeshNode } from "@/store/useStore";
-import { extractLeanGeometry, serializeShellGeometry } from "./meshOptimizer";
+import { extractLeanGeometry } from "./uvUtils";
+import { serializeShellGeometry } from "./meshOptimizer";
 
 const loader = new GLTFLoader();
 

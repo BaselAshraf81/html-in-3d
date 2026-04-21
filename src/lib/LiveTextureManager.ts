@@ -11,16 +11,15 @@ import * as THREE from "three";
  *   Stage 2: Mirror canvas (drawImage copy each frame)
  *   Stage 3: THREE.CanvasTexture on the mirror
  *
- * Scripts are stripped from the live rendering to prevent imported HTML from
- * leaking into the studio page. The original HTML (with scripts) is preserved
- * in `htmlContent` and used only in the final export where it runs in its own
- * standalone document context.
+ * HTML preparation uses DOMParser instead of regex for reliable handling of
+ * full HTML documents, body styles, external stylesheets, and script removal.
+ * The original HTML (with scripts) is preserved in `htmlContent` and used
+ * only in the final export where it runs in its own standalone document.
  */
 
 export interface LiveTextureInstance {
   id: string;
   panelId: string;
-  /** Each instance gets its own container to ensure independent painting */
   container: HTMLDivElement;
   stagingCanvas: HTMLCanvasElement;
   stagingCtx: CanvasRenderingContext2D;
@@ -30,9 +29,7 @@ export interface LiveTextureInstance {
   texture: THREE.CanvasTexture;
   width: number;
   height: number;
-  /** Original HTML content WITH scripts — preserved for export */
   htmlContent: string;
-  /** True once the first successful drawElementImage capture has occurred */
   captureReady: boolean;
   captureTimer: number | null;
 }
@@ -45,12 +42,9 @@ export class LiveTextureManager {
     this.startGlobalLoop();
   }
 
-  /** Create an isolated container for a single texture instance */
   private createContainer(id: string): HTMLDivElement {
     const container = document.createElement("div");
     container.id = `ltm-container-${id.slice(0, 8)}`;
-    // Each container is independently positioned so the browser
-    // lays out and paints each staging canvas independently.
     container.style.cssText = `
       position: fixed; bottom: 0; right: 0;
       width: 1px; height: 1px; overflow: hidden;
@@ -69,7 +63,6 @@ export class LiveTextureManager {
   ): THREE.CanvasTexture {
     this.destroyTexture(assignmentId);
 
-    // Each instance gets its own container
     const container = this.createContainer(assignmentId);
 
     const stagingCanvas = document.createElement("canvas");
@@ -82,7 +75,6 @@ export class LiveTextureManager {
       overflow: hidden; position: relative; box-sizing: border-box;
     `;
 
-    // Native path only — the studio requires the HTML-in-Canvas API flag
     stagingCanvas.setAttribute("layoutsubtree", "");
     (stagingCanvas as any).layoutSubtree = true;
     stagingCanvas.appendChild(contentElement);
@@ -115,7 +107,6 @@ export class LiveTextureManager {
 
     this.instances.set(assignmentId, inst);
 
-    // Check if the native API is actually available
     const hasNativeApi = "drawElementImage" in stagingCtx;
     if (hasNativeApi) {
       (stagingCanvas as any).onpaint = () => {
@@ -125,10 +116,9 @@ export class LiveTextureManager {
             inst.contentElement, 0, 0, inst.width, inst.height
           );
           inst.captureReady = true;
-        } catch { /* no paint record yet — keep showing placeholder */ }
+        } catch { /* no paint record yet */ }
       };
     } else {
-      // API not available — use html2canvas-style fallback via foreignObject SVG
       console.warn("[LiveTextureManager] drawElementImage not available, using SVG foreignObject fallback");
       inst.captureTimer = window.setTimeout(() => this.captureForeignObject(inst), 100);
     }
@@ -144,20 +134,39 @@ export class LiveTextureManager {
     inst.htmlContent = htmlContent;
     inst.captureReady = false;
 
-    // Content goes directly into the contentElement (direct child of layoutsubtree canvas).
-    // drawElementImage captures the element's visual rendering including all children.
-    // Scripts are stripped to prevent execution in the studio context.
-    // CSS is scoped via @scope to prevent leaking to the studio page.
-    const sanitized = stripScriptsForPreview(htmlContent, inst.width, inst.height);
     const scopeId = `ltm-${assignmentId.slice(0, 8)}`;
     inst.contentElement.setAttribute("data-ltm-scope", scopeId);
-    inst.contentElement.innerHTML = `<div style="width:${inst.width}px;height:${inst.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:#ffffff;">${scopeStyles(sanitized, scopeId)}</div>`;
+
+    // Remove any previously injected <link>/<style> tags for this instance
+    document.querySelectorAll(`[data-ltm-link="${scopeId}"]`).forEach((el) => el.remove());
+
+    // Use DOMParser for reliable HTML processing — no regex CSS rewriting
+    const prepared = prepareHtmlForPreview(htmlContent, scopeId);
+
+    // Inject external <link> and <style> tags into document <head>.
+    // Link tags inside a layoutsubtree canvas child won't trigger fetches,
+    // so they must live in the real document head.
+    for (const node of prepared.headNodes) {
+      node.setAttribute("data-ltm-link", scopeId);
+      document.head.appendChild(node);
+    }
+
+    // Set the content — this is the direct child of the layoutsubtree canvas
+    // that drawElementImage will capture.
+    inst.contentElement.innerHTML = "";
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = `width:${inst.width}px;height:${inst.height}px;overflow:hidden;position:relative;box-sizing:border-box;`;
+    // Apply body-level styles (background, color, font, etc.) to the wrapper
+    if (prepared.bodyStyle) {
+      wrapper.style.cssText += prepared.bodyStyle;
+    }
+    wrapper.innerHTML = prepared.bodyHtml;
+    inst.contentElement.appendChild(wrapper);
 
     const hasNativeApi = "drawElementImage" in inst.stagingCtx;
     if (hasNativeApi) {
       try { (inst.stagingCanvas as any).requestPaint?.(); } catch {}
     } else {
-      // Schedule SVG foreignObject capture
       if (inst.captureTimer !== null) clearTimeout(inst.captureTimer);
       inst.captureTimer = window.setTimeout(() => this.captureForeignObject(inst), 200);
     }
@@ -197,7 +206,6 @@ export class LiveTextureManager {
 
       if (inst.captureReady) {
         if (hasNativeApi) {
-          // Native path: keep syncing staging → mirror each frame
           try {
             inst.mirrorCtx.clearRect(0, 0, inst.width, inst.height);
             inst.mirrorCtx.drawImage(inst.stagingCanvas, 0, 0, inst.width, inst.height);
@@ -205,21 +213,14 @@ export class LiveTextureManager {
           } catch { /* not ready */ }
           try { (inst.stagingCanvas as any).requestPaint?.(); } catch {}
         } else {
-          // Fallback path: mirror already has content from captureForeignObject
           inst.texture.needsUpdate = true;
         }
       } else if (inst.htmlContent && hasNativeApi) {
-        // No capture yet — just ping requestPaint; onpaint handles the capture
         try { (inst.stagingCanvas as any).requestPaint?.(); } catch {}
       }
     }
   }
 
-  /**
-   * Fallback capture: serialize the contentElement's innerHTML into an SVG foreignObject,
-   * render it to an Image, then draw to the mirror canvas.
-   * Works without the drawElementImage API flag.
-   */
   private captureForeignObject(inst: LiveTextureInstance): void {
     const html = inst.contentElement.innerHTML;
     if (!html) return;
@@ -241,7 +242,6 @@ export class LiveTextureManager {
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      // Keep placeholder on error
     };
     img.src = url;
   }
@@ -277,8 +277,10 @@ export class LiveTextureManager {
     const inst = this.instances.get(id);
     if (!inst) return;
     if (inst.captureTimer !== null) clearTimeout(inst.captureTimer);
+    const scopeId = `ltm-${id.slice(0, 8)}`;
+    document.querySelectorAll(`[data-ltm-link="${scopeId}"]`).forEach((el) => el.remove());
     inst.texture.dispose();
-    inst.container.remove(); // removes staging canvas, content element, iframe too
+    inst.container.remove();
     inst.mirrorCanvas.remove();
     this.instances.delete(id);
   }
@@ -289,84 +291,169 @@ export class LiveTextureManager {
   }
 }
 
-// --- HTML preparation ---
+// ═══════════════════════════════════════════════════════════════════════════
+// HTML Preparation — DOMParser-based (no regex CSS rewriting)
+//
+// Uses the browser's own HTML parser to reliably handle full documents,
+// body styles, external stylesheets, script removal, and CSS scoping.
+// ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * Scope CSS rules inside <style> blocks to a container attribute selector.
- * This prevents styles from imported HTML from leaking to the studio page.
- * Uses CSS @scope when supported, falls back to prefixing selectors with
- * the container attribute selector.
- */
-function scopeStyles(html: string, scopeId: string): string {
-  const scopeSelector = `[data-ltm-scope="${scopeId}"]`;
-  return html.replace(/<style([^>]*)>([\s\S]*?)<\/style>/gi, (_match, attrs, css) => {
-    // Wrap all rules in @scope (Chrome 118+) with fallback nesting
-    const scoped = `@scope (${scopeSelector}) { ${css} }`;
-    return `<style${attrs}>${scoped}</style>`;
-  });
+interface PreparedHtml {
+  /** Nodes to inject into document <head> (scoped <style> and <link> elements) */
+  headNodes: HTMLElement[];
+  /** Inner HTML for the body content wrapper */
+  bodyHtml: string;
+  /** CSS text from body element's style attribute + body CSS rules, to apply on wrapper */
+  bodyStyle: string;
 }
 
 /**
- * Strip scripts from HTML for safe live preview in the studio.
+ * Parse HTML content and prepare it for live preview inside a layoutsubtree canvas.
  *
- * The layoutsubtree canvas + shadow DOM provides CSS isolation, but scripts
- * inside shadow DOM still execute in the main page context and can access
- * `document`, `window`, etc. To prevent imported HTML from leaking into the
- * studio, we strip all <script> tags and inline event handlers for the live
- * rendering. The visual output (CSS, layout, static content) is preserved.
- *
- * The original HTML with scripts is kept in `htmlContent` and used in the
- * final export where each panel runs in its own standalone document.
+ * 1. Parses with DOMParser (handles full docs, fragments, malformed HTML)
+ * 2. Removes all <script> elements and inline event handlers via DOM traversal
+ * 3. Detects Tailwind CDN and substitutes with CSS-only build
+ * 4. Extracts <style> blocks and wraps them in @scope for CSS isolation
+ * 5. Extracts <link rel="stylesheet"> for injection into document <head>
+ * 6. Extracts body-level styles (from style attribute and CSS body{} rules)
+ *    and returns them as inline CSS for the content wrapper
  */
-function stripScriptsForPreview(html: string, _width: number, _height: number): string {
-  const isFullDoc = /<html[\s>]/i.test(html) || /<!DOCTYPE/i.test(html);
+function prepareHtmlForPreview(html: string, scopeId: string): PreparedHtml {
+  const scopeSelector = `[data-ltm-scope="${scopeId}"]`;
+  const headNodes: HTMLElement[] = [];
 
-  let content: string;
-  if (!isFullDoc) {
-    content = html;
-  } else {
-    // Full document: extract styles and body content
-    const parts: string[] = [];
+  // Detect Tailwind CDN before parsing (DOMParser won't execute scripts)
+  const hasTailwind = /cdn\.tailwindcss\.com/i.test(html);
 
-    const styleMatches = html.match(/<style[^>]*>[\s\S]*?<\/style>/gi);
-    if (styleMatches) parts.push(styleMatches.join("\n"));
+  // Parse the HTML into a real DOM tree
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
 
-    // Convert <link rel="stylesheet"> to @import for shadow DOM compatibility
-    const linkMatches = html.match(/<link[^>]*rel=["']stylesheet["'][^>]*>/gi);
-    if (linkMatches) {
-      const imports: string[] = [];
-      for (const link of linkMatches) {
-        const hrefMatch = link.match(/href=["']([^"']+)["']/i);
-        if (hrefMatch) {
-          imports.push(`@import url("${hrefMatch[1]}");`);
-        }
-      }
-      if (imports.length) {
-        parts.push(`<style>${imports.join("\n")}</style>`);
+  // --- Remove all <script> elements ---
+  doc.querySelectorAll("script").forEach((el) => el.remove());
+
+  // --- Remove inline event handlers (onclick, onload, etc.) ---
+  const allElements = doc.querySelectorAll("*");
+  for (const el of allElements) {
+    const attrs = Array.from(el.attributes);
+    for (const attr of attrs) {
+      if (attr.name.startsWith("on")) {
+        el.removeAttribute(attr.name);
       }
     }
-
-    const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (bodyMatch) {
-      let bodyContent = bodyMatch[1].replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
-      parts.push(bodyContent);
-    } else {
-      let c = html
-        .replace(/<!DOCTYPE[^>]*>/gi, "")
-        .replace(/<\/?html[^>]*>/gi, "")
-        .replace(/<head[\s\S]*?<\/head>/gi, "")
-        .replace(/<\/?body[^>]*>/gi, "");
-      parts.push(c);
-    }
-    content = parts.join("\n");
   }
 
-  // Strip all <script> tags (inline and external) — they must not run in the studio
-  content = content.replace(/<script[\s\S]*?<\/script>/gi, "");
-  // Strip inline event handlers (onclick, onload, onerror, etc.)
-  content = content.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+  // --- Extract body style attribute ---
+  const bodyEl = doc.body;
+  const bodyStyleAttr = bodyEl?.getAttribute("style") || "";
 
-  return content;
+  // --- Extract CSS body{} rules and rewrite them ---
+  // Walk all <style> elements, parse their CSS to find body/html rules,
+  // extract those properties, and scope the remaining rules.
+  let extractedBodyCss = "";
+  const styleElements = doc.querySelectorAll("style");
+  for (const styleEl of styleElements) {
+    const cssText = styleEl.textContent || "";
+
+    // Use a temporary stylesheet to parse CSS rules properly
+    const { bodyRules, otherCss } = extractBodyRules(cssText);
+    extractedBodyCss += bodyRules;
+
+    // Wrap remaining CSS in @scope for isolation
+    const scopedStyle = document.createElement("style");
+    scopedStyle.textContent = `@scope (${scopeSelector}) { ${otherCss} }`;
+    headNodes.push(scopedStyle);
+
+    // Remove from the body content (it's now in headNodes)
+    styleEl.remove();
+  }
+
+  // --- Extract <link rel="stylesheet"> elements ---
+  const linkElements = doc.querySelectorAll('link[rel="stylesheet"]');
+  for (const linkEl of linkElements) {
+    const clone = document.createElement("link");
+    clone.rel = "stylesheet";
+    clone.href = linkEl.getAttribute("href") || "";
+    if (clone.href) headNodes.push(clone);
+    linkEl.remove();
+  }
+
+  // --- Tailwind CDN substitution ---
+  if (hasTailwind) {
+    const twLink = document.createElement("link");
+    twLink.rel = "stylesheet";
+    twLink.href = "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4/dist/cdn.min.css";
+    headNodes.unshift(twLink);
+  }
+
+  // --- Combine body styles ---
+  // bodyStyleAttr = inline style="..." from <body>
+  // extractedBodyCss = properties extracted from body{} CSS rules
+  const bodyStyle = [extractedBodyCss, bodyStyleAttr].filter(Boolean).join("; ");
+
+  // --- Get body innerHTML ---
+  const bodyHtml = bodyEl?.innerHTML || doc.documentElement?.innerHTML || html;
+
+  return { headNodes, bodyHtml, bodyStyle };
+}
+
+/**
+ * Extract `body` and `html` rule properties from a CSS string.
+ * Returns the extracted properties as inline CSS text, and the remaining
+ * CSS with those rules removed.
+ *
+ * Uses a temporary CSSStyleSheet for proper CSS parsing — no regex on CSS.
+ */
+function extractBodyRules(cssText: string): { bodyRules: string; otherCss: string } {
+  let bodyRules = "";
+  let otherCss = "";
+
+  // Create a temporary stylesheet to parse the CSS properly
+  const tempStyle = document.createElement("style");
+  tempStyle.textContent = cssText;
+  // Must be in the DOM for the browser to parse the rules
+  document.head.appendChild(tempStyle);
+  const sheet = tempStyle.sheet;
+
+  if (sheet) {
+    try {
+      for (let i = 0; i < sheet.cssRules.length; i++) {
+        const rule = sheet.cssRules[i];
+        if (rule instanceof CSSStyleRule) {
+          const sel = rule.selectorText.trim().toLowerCase();
+          // Check if this rule targets body or html (possibly combined)
+          const selParts = sel.split(",").map((s) => s.trim());
+          const isBodyOrHtml = selParts.every(
+            (s) => s === "body" || s === "html" || s === "html body" ||
+                   s === ":root"
+          );
+          if (isBodyOrHtml && !sel.includes("::") && !sel.includes(":not")) {
+            // Extract the properties as inline style text
+            bodyRules += rule.style.cssText;
+          } else {
+            otherCss += rule.cssText + "\n";
+          }
+        } else if (rule instanceof CSSKeyframesRule) {
+          otherCss += rule.cssText + "\n";
+        } else if (rule instanceof CSSMediaRule) {
+          otherCss += rule.cssText + "\n";
+        } else if (rule instanceof CSSImportRule) {
+          otherCss += rule.cssText + "\n";
+        } else {
+          // CSSSupportsRule, CSSLayerRule, etc.
+          otherCss += rule.cssText + "\n";
+        }
+      }
+    } catch {
+      // CORS or parsing error — fall back to raw CSS
+      otherCss = cssText;
+    }
+  } else {
+    otherCss = cssText;
+  }
+
+  tempStyle.remove();
+  return { bodyRules, otherCss };
 }
 
 let _manager: LiveTextureManager | null = null;

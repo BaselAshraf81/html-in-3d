@@ -205,8 +205,12 @@ export function applyPlanarProjection(mesh: THREE.Mesh): void {
     if (isFrontVertex) {
       const uComp = getComponent(pos, oldIdx, uAxis);
       const vComp = getComponent(pos, oldIdx, vAxis);
-      newUvs[newIdx * 2]     = (uComp - minU) / rangeU;
-      newUvs[newIdx * 2 + 1] = (vComp - minV) / rangeV;
+      // Small inset to prevent texture edge bleeding under ClampToEdgeWrapping
+      const inset = 0.004;
+      const rawU = (uComp - minU) / rangeU;
+      const rawV = (vComp - minV) / rangeV;
+      newUvs[newIdx * 2]     = inset + rawU * (1 - 2 * inset);
+      newUvs[newIdx * 2 + 1] = inset + rawV * (1 - 2 * inset);
     } else {
       // Back faces get 0,0 UVs — won't matter since they use a different material
       newUvs[newIdx * 2]     = 0;
@@ -245,6 +249,106 @@ export function restoreOriginalGeometry(mesh: THREE.Mesh): void {
     savedGeometries.delete(mesh);
   }
   projectedMeshes.delete(mesh);
+}
+
+// ── Lean geometry extraction (import-time) ───────────────────────────────
+
+export interface LeanResult {
+  geometry: THREE.BufferGeometry;
+  keptTriangles: number;
+  originalTriangles: number;
+  savedBytes: number;
+}
+
+/**
+ * Strip a geometry down to position + normal + projected UVs.
+ * Keeps ALL triangles and PRESERVES the index buffer to avoid seam gaps.
+ * Drops tangents, morph targets, skinning, vertex colors, etc.
+ *
+ * Reuses `detectProjectionAxes` for consistent axis detection across the
+ * entire UV pipeline.
+ */
+export function extractLeanGeometry(srcGeometry: THREE.BufferGeometry): LeanResult {
+  const { uAxis, vAxis } = detectProjectionAxes(srcGeometry);
+
+  const pos = srcGeometry.attributes.position as THREE.BufferAttribute;
+  const norm = srcGeometry.attributes.normal as THREE.BufferAttribute | undefined;
+  const totalVerts = pos.count;
+
+  // Compute projection bounds for UVs
+  let minU = Infinity, maxU = -Infinity;
+  let minV = Infinity, maxV = -Infinity;
+  for (let i = 0; i < totalVerts; i++) {
+    const u = getComponent(pos, i, uAxis);
+    const v = getComponent(pos, i, vAxis);
+    if (u < minU) minU = u;
+    if (u > maxU) maxU = u;
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
+  const rangeU = maxU - minU || 1;
+  const rangeV = maxV - minV || 1;
+
+  const newPositions = new Float32Array(totalVerts * 3);
+  const newNormals = norm ? new Float32Array(totalVerts * 3) : null;
+  const newUVs = new Float32Array(totalVerts * 2);
+
+  for (let i = 0; i < totalVerts; i++) {
+    newPositions[i * 3] = pos.getX(i);
+    newPositions[i * 3 + 1] = pos.getY(i);
+    newPositions[i * 3 + 2] = pos.getZ(i);
+
+    if (newNormals && norm) {
+      newNormals[i * 3] = norm.getX(i);
+      newNormals[i * 3 + 1] = norm.getY(i);
+      newNormals[i * 3 + 2] = norm.getZ(i);
+    }
+
+    // Small inset to prevent texture edge bleeding under ClampToEdgeWrapping
+    const inset = 0.004;
+    const rawU = (getComponent(pos, i, uAxis) - minU) / rangeU;
+    const rawV = (getComponent(pos, i, vAxis) - minV) / rangeV;
+    newUVs[i * 2] = inset + rawU * (1 - 2 * inset);
+    newUVs[i * 2 + 1] = inset + rawV * (1 - 2 * inset);
+  }
+
+  const leanGeo = new THREE.BufferGeometry();
+  leanGeo.setAttribute("position", new THREE.BufferAttribute(newPositions, 3));
+  if (newNormals) {
+    leanGeo.setAttribute("normal", new THREE.BufferAttribute(newNormals, 3));
+  } else {
+    leanGeo.computeVertexNormals();
+  }
+  leanGeo.setAttribute("uv", new THREE.BufferAttribute(newUVs, 2));
+
+  // Preserve index buffer to avoid seam gaps
+  if (srcGeometry.index) {
+    leanGeo.setIndex(srcGeometry.index.clone());
+  }
+
+  const totalTris = srcGeometry.index
+    ? srcGeometry.index.count / 3
+    : totalVerts / 3;
+
+  const originalBytes = estimateGeometryBytes(srcGeometry);
+  const leanBytes = estimateGeometryBytes(leanGeo);
+
+  return {
+    geometry: leanGeo,
+    keptTriangles: totalTris,
+    originalTriangles: totalTris,
+    savedBytes: originalBytes - leanBytes,
+  };
+}
+
+function estimateGeometryBytes(geo: THREE.BufferGeometry): number {
+  let bytes = 0;
+  for (const key of Object.keys(geo.attributes)) {
+    const attr = geo.attributes[key] as THREE.BufferAttribute;
+    bytes += attr.array.byteLength;
+  }
+  if (geo.index) bytes += geo.index.array.byteLength;
+  return bytes;
 }
 
 // ── Tiny helpers ─────────────────────────────────────────────────────────

@@ -4,15 +4,9 @@ import { saveTextFile } from "@/lib/fileIO";
 import {
   generateStandaloneHtml,
   previewExportHtml,
-  defaultExportOptions,
   type ExportOptions,
 } from "@/lib/exportHtml";
 import { saveProject } from "@/lib/projectIO";
-import {
-  extractShellGeometry,
-  deserializeShellGeometry,
-  serializeShellGeometry,
-} from "@/lib/meshOptimizer";
 
 interface Props {
   open: boolean;
@@ -28,9 +22,6 @@ export default function ExportModal({ open, onClose }: Props) {
   const textureAssignments = useStore((s) => s.textureAssignments);
 
   const [format, setFormat] = useState<ExportFormat>("standalone");
-  const [bundleEngine, setBundleEngine] = useState(true);
-  const [textureCompression, setTextureCompression] = useState(false);
-  const [optimizeMeshes, setOptimizeMeshes] = useState(false);
   const [resolution, setResolution] = useState<ExportOptions["resolution"]>("responsive");
   const [exporting, setExporting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -45,28 +36,36 @@ export default function ExportModal({ open, onClose }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
-  // Estimate export size
   const estimateSize = useCallback(() => {
     let bytes = 0;
-    // HTML panels
     for (const p of htmlPanels) bytes += new Blob([p.htmlContent]).size;
-    // Shell geometry data (already compact)
     for (const m of gltfModels) {
       for (const node of m.meshNodes) {
-        bytes += node.shell.position.length * 4; // Float32
+        bytes += node.shell.position.length * 4;
         bytes += node.shell.normal.length * 4;
         bytes += node.shell.uv.length * 4;
       }
     }
-    // Three.js runtime (~600KB minified via CDN — not embedded, just referenced)
-    if (bundleEngine && format === "standalone") bytes += 10_000; // import map overhead only
-    // Scene JSON overhead
-    bytes += 10_000;
+    bytes += 10_000; // import map + scene JSON overhead
 
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }, [htmlPanels, gltfModels, bundleEngine, format]);
+  }, [htmlPanels, gltfModels]);
+
+  const buildExportHtml = useCallback(() => {
+    const shellGeometries: Record<string, any> = {};
+    for (const model of gltfModels) {
+      for (const node of model.meshNodes) {
+        shellGeometries[`${model.id}:${node.meshName}`] = node.shell;
+      }
+    }
+    return generateStandaloneHtml(
+      objects, gltfModels, htmlPanels, textureAssignments,
+      { format: "standalone", resolution },
+      shellGeometries
+    );
+  }, [objects, gltfModels, htmlPanels, textureAssignments, resolution]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -84,47 +83,13 @@ export default function ExportModal({ open, onClose }: Props) {
         if (path) setStatus("Project saved successfully");
         else setStatus(null);
       } else {
-        // Build shell geometries for export from stored lean geometry.
-        // If optimizeMeshes is on, run back-face culling for thick meshes.
-        // Otherwise, use the lean geometry as-is (all triangles preserved).
-        const shellGeometries: Record<string, any> = {};
-        for (const model of gltfModels) {
-          for (const node of model.meshNodes) {
-            if (optimizeMeshes) {
-              // Reconstruct BufferGeometry, run shell extraction, re-serialize
-              const leanGeo = deserializeShellGeometry(node.shell);
-              const result = extractShellGeometry(leanGeo);
-              shellGeometries[`${model.id}:${node.meshName}`] = serializeShellGeometry(result.geometry);
-            } else {
-              shellGeometries[`${model.id}:${node.meshName}`] = node.shell;
-            }
-          }
-        }
-
-        const html = generateStandaloneHtml(
-          objects,
-          gltfModels,
-          htmlPanels,
-          textureAssignments,
-          {
-            format: "standalone",
-            bundleEngine,
-            textureCompression,
-            resolution,
-            optimizeMeshes,
-          },
-          shellGeometries
-        );
-
+        const html = buildExportHtml();
         const filePath = await saveTextFile(
           html,
           "vibecanvas-export.html",
           [{ name: "HTML", extensions: ["html"] }]
         );
-
-        if (filePath) {
-          setStatus("Export complete");
-        }
+        if (filePath) setStatus("Export complete");
       }
     } catch (err) {
       console.error("Export failed:", err);
@@ -132,25 +97,11 @@ export default function ExportModal({ open, onClose }: Props) {
     } finally {
       setExporting(false);
     }
-  }, [
-    format, objects, gltfModels, htmlPanels, textureAssignments,
-    bundleEngine, textureCompression, resolution, optimizeMeshes,
-  ]);
+  }, [format, objects, gltfModels, htmlPanels, textureAssignments, buildExportHtml]);
 
   const handlePreview = useCallback(() => {
-    const shellGeometries: Record<string, any> = {};
-    for (const model of gltfModels) {
-      for (const node of model.meshNodes) {
-        shellGeometries[`${model.id}:${node.meshName}`] = node.shell;
-      }
-    }
-    const html = generateStandaloneHtml(
-      objects, gltfModels, htmlPanels, textureAssignments,
-      { format: "standalone", bundleEngine, textureCompression, resolution, optimizeMeshes },
-      shellGeometries
-    );
-    previewExportHtml(html);
-  }, [objects, gltfModels, htmlPanels, textureAssignments, bundleEngine, textureCompression, resolution, optimizeMeshes]);
+    previewExportHtml(buildExportHtml());
+  }, [buildExportHtml]);
 
   if (!open) return null;
 
@@ -159,7 +110,7 @@ export default function ExportModal({ open, onClose }: Props) {
       key: "standalone",
       icon: "html",
       label: "Standalone HTML",
-      desc: "Single file output. Three.js + scene embedded. Opens in any browser.",
+      desc: "Single file with Three.js via CDN. Opens in any browser with the HTML-in-Canvas flag.",
     },
     {
       key: "project",
@@ -235,40 +186,24 @@ export default function ExportModal({ open, onClose }: Props) {
             </h3>
             <div className="space-y-6">
               {format !== "project" && (
-                <>
-                  <ToggleRow
-                    label="Optimize Meshes for Export"
-                    desc="Replace textured GLTF meshes with lightweight shell geometry. Dramatically reduces file size."
-                    checked={optimizeMeshes}
-                    onChange={setOptimizeMeshes}
-                  />
-                  <ToggleRow
-                    label="Bundle Rendering Engine"
-                    desc="Include Three.js core via CDN import map in the output file."
-                    checked={bundleEngine}
-                    onChange={setBundleEngine}
-                  />
-                  <ToggleRow
-                    label="Texture Compression"
-                    desc="Compress HTML textures for smaller output (may reduce quality)."
-                    checked={textureCompression}
-                    onChange={setTextureCompression}
-                  />
-                  <div className="pt-4 border-t border-outline-variant/20">
-                    <label className="block text-sm text-on-surface mb-2">
-                      Target Canvas Resolution
-                    </label>
-                    <select
-                      value={resolution}
-                      onChange={(e) => setResolution(e.target.value as ExportOptions["resolution"])}
-                      className="block w-full rounded border-outline-variant/30 bg-surface-container-lowest text-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary h-10 px-3"
-                    >
-                      <option value="responsive">Responsive (Auto-scale to container)</option>
-                      <option value="1080p">Fixed 1080p (1920×1080)</option>
-                      <option value="4k">Fixed 4K (3840×2160)</option>
-                    </select>
-                  </div>
-                </>
+                <div>
+                  <label className="block text-sm text-on-surface mb-2">
+                    Viewport Resolution
+                  </label>
+                  <select
+                    value={resolution}
+                    onChange={(e) => setResolution(e.target.value as ExportOptions["resolution"])}
+                    className="block w-full rounded border-outline-variant/30 bg-surface-container-lowest text-sm text-on-surface focus:border-primary focus:ring-1 focus:ring-primary h-10 px-3"
+                  >
+                    <option value="responsive">Responsive (fills browser window)</option>
+                    <option value="1080p">Fixed 1080p (1920×1080)</option>
+                    <option value="4k">Fixed 4K (3840×2160)</option>
+                  </select>
+                  <p className="text-[11px] text-on-surface-variant mt-1.5">
+                    Responsive scales the 3D viewport to fill the browser window. Fixed resolutions
+                    are useful for kiosk displays or digital signage.
+                  </p>
+                </div>
               )}
               {format === "project" && (
                 <p className="text-sm text-on-surface-variant">
@@ -315,30 +250,6 @@ export default function ExportModal({ open, onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function ToggleRow({
-  label, desc, checked, onChange,
-}: {
-  label: string; desc: string; checked: boolean; onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <div>
-        <div className="text-sm text-on-surface">{label}</div>
-        <div className="text-xs text-on-surface-variant mt-0.5">{desc}</div>
-      </div>
-      <label className="relative inline-flex items-center cursor-pointer">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="sr-only peer"
-        />
-        <div className="w-9 h-5 bg-surface-container-highest rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
-      </label>
     </div>
   );
 }
