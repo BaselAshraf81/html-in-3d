@@ -12,7 +12,7 @@ export default function Footer() {
   return (
     <footer className="fixed bottom-0 left-0 w-full z-[100] flex items-center justify-between px-4 h-6 bg-slate-100 border-t border-slate-900/10 select-none">
       <div className="text-[10px] font-mono uppercase tracking-tighter text-slate-500">
-        VibeCanvas Studio | 60 FPS | {coords} | Objects: {objects.length}
+        HTML-IN-3D | BaselAshraf81 | {coords} | Objects: {objects.length}
       </div>
       <div className="flex items-center gap-4">
         <span className="text-[10px] font-mono uppercase tracking-tighter text-slate-500 hover:underline cursor-pointer">

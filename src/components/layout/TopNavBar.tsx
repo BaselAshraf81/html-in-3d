@@ -152,7 +152,7 @@ export default function TopNavBar() {
     <header className="fixed top-0 left-0 w-full z-[100] flex items-center justify-between px-6 h-12 bg-slate-50/70 backdrop-blur-xl border-b border-slate-900/10">
       <div className="flex items-center gap-6" ref={menuRef}>
         <div className="text-base font-bold tracking-tighter text-slate-900 uppercase select-none">
-          VibeCanvas Studio
+          HTML-IN-3D
         </div>
         <nav className="flex items-center gap-1 relative">
           {(Object.keys(menuItems) as MenuKey[]).map((key) => (

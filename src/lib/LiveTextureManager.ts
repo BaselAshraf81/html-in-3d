@@ -155,15 +155,10 @@ export class LiveTextureManager {
     // that drawElementImage will capture.
     inst.contentElement.innerHTML = "";
     const wrapper = document.createElement("div");
-    wrapper.style.cssText = `width:${inst.width}px;height:${inst.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:transparent;`;
-    // Apply body-level styles (color, font, etc.) to the wrapper.
-    // Strip any background properties — the wrapper must stay transparent
-    // so the canvas has alpha=0 where there's no content, allowing the
-    // overlay mesh to show the original 3D material through.
+    wrapper.style.cssText = `width:${inst.width}px;height:${inst.height}px;overflow:hidden;position:relative;box-sizing:border-box;`;
+    // Apply body-level styles (background, color, font, etc.) to the wrapper
     if (prepared.bodyStyle) {
-      const cleanedBodyStyle = prepared.bodyStyle
-        .replace(/\bbackground(-color|-image|-attachment|-clip|-origin|-position|-repeat|-size|-blend-mode)?\s*:[^;]*(;|$)/gi, "");
-      wrapper.style.cssText += cleanedBodyStyle;
+      wrapper.style.cssText += prepared.bodyStyle;
     }
     wrapper.innerHTML = prepared.bodyHtml;
     inst.contentElement.appendChild(wrapper);
@@ -364,10 +359,31 @@ function prepareHtmlForPreview(html: string, scopeId: string): PreparedHtml {
     const { bodyRules, otherCss } = extractBodyRules(cssText);
     extractedBodyCss += bodyRules;
 
-    // Wrap remaining CSS in @scope for isolation
-    const scopedStyle = document.createElement("style");
-    scopedStyle.textContent = `@scope (${scopeSelector}) { ${otherCss} }`;
-    headNodes.push(scopedStyle);
+    // Separate @import rules — they MUST be at the top level of a stylesheet.
+    // CSS spec forbids @import inside @scope or any other at-rule.
+    // Put @import rules in their own <style> tag, scope the rest.
+    const importRules: string[] = [];
+    const scopedRules: string[] = [];
+    for (const line of otherCss.split("\n")) {
+      if (line.trim().startsWith("@import ")) {
+        importRules.push(line);
+      } else {
+        scopedRules.push(line);
+      }
+    }
+
+    if (importRules.length > 0) {
+      const importStyle = document.createElement("style");
+      importStyle.textContent = importRules.join("\n");
+      headNodes.push(importStyle);
+    }
+
+    const scopedCss = scopedRules.join("\n").trim();
+    if (scopedCss) {
+      const scopedStyle = document.createElement("style");
+      scopedStyle.textContent = `@scope (${scopeSelector}) { ${scopedCss} }`;
+      headNodes.push(scopedStyle);
+    }
 
     // Remove from the body content (it's now in headNodes)
     styleEl.remove();

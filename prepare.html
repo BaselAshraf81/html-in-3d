@@ -31,7 +31,14 @@
     margin-bottom: 16px;
   }
   .name { font-size: 24px; font-weight: 600; color: #e6edf3; }
-  .username { font-size: 18px; color: #8b949e; font-weight: 300; }
+  .username { font-size: 18px; color: #ff0000; font-weight: 300; }
+  .hero-username {
+    font-size: 42px; font-weight: 700; color: #e6edf3;
+    margin-bottom: 16px; letter-spacing: -1px;
+    background: linear-gradient(90deg, #4493f8, #39d353);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
   .bio {
     margin-top: 12px; font-size: 14px; color: #8b949e;
     font-family: 'Courier New', monospace;
@@ -63,7 +70,8 @@
     padding: 16px; display: flex; flex-direction: column; gap: 8px;
   }
   .repo-card:hover { border-color: #4493f8; }
-  .repo-name { font-size: 14px; font-weight: 600; color: #4493f8; }
+  .repo-name { font-size: 14px; font-weight: 600; }
+  .repo-name a { color: #4493f8; }
   .repo-desc { font-size: 12px; color: #8b949e; line-height: 1.4; flex: 1; }
   .repo-meta { display: flex; gap: 12px; font-size: 12px; color: #8b949e; align-items: center; }
   .lang-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
@@ -141,10 +149,11 @@ done</div>
 
   <!-- Main content -->
   <div class="main">
+    <div class="hero-username">BaselAshraf81</div>
     <div class="section-title">Pinned</div>
     <div class="pinned-grid">
       <div class="repo-card">
-        <div class="repo-name">📦 layout-sans</div>
+        <div class="repo-name"><a href="https://github.com/BaselAshraf81/layout-sans" target="_blank"></a>📦 layout-sans</a></div>
         <div class="repo-desc">LayoutSans — Pure TypeScript 2D flex/grid layout engine powered by Pretext. Zero DOM. Zero WASM.</div>
         <div class="repo-meta">
           <span><span class="lang-dot lang-ts"></span> TypeScript</span>
@@ -153,7 +162,7 @@ done</div>
         </div>
       </div>
       <div class="repo-card">
-        <div class="repo-name">📦 holystitch</div>
+        <div class="repo-name"><a href="https://github.com/BaselAshraf81/holystitch" target="_blank"></a>📦 holystitch</a></div>
         <div class="repo-desc">Instant Google Stitch → React conversion. Zero AI tokens.</div>
         <div class="repo-meta">
           <span><span class="lang-dot lang-ts"></span> TypeScript</span>
@@ -161,7 +170,7 @@ done</div>
         </div>
       </div>
       <div class="repo-card">
-        <div class="repo-name">📦 vibellm</div>
+        <div class="repo-name"><a href="https://github.com/BaselAshraf81/vibellm" target="_blank"></a>📦 vibellm</a></div>
         <div class="repo-desc">LLM randomizer, generate random weights and structure.</div>
         <div class="repo-meta">
           <span><span class="lang-dot lang-py"></span> Python</span>
@@ -169,7 +178,7 @@ done</div>
         </div>
       </div>
       <div class="repo-card">
-        <div class="repo-name">📦 threatalert</div>
+        <div class="repo-name"><a href="https://github.com/BaselAshraf81/threatalert" target="_blank"></a>📦 threatalert</a></div>
         <div class="repo-desc">Real-time threat intelligence monitoring platform.</div>
         <div class="repo-meta">
           <span><span class="lang-dot lang-ts"></span> TypeScript</span>
@@ -177,7 +186,7 @@ done</div>
         </div>
       </div>
       <div class="repo-card">
-        <div class="repo-name">📦 fx-inject-shim</div>
+        <div class="repo-name"><a href="https://github.com/BaselAshraf81/fx-inject-shim" target="_blank"></a>📦 fx-inject-shim</a></div>
         <div class="repo-desc">Drop-in Firefox 152 compatibility shim for tabs/scripting injection APIs</div>
         <div class="repo-meta">
           <span><span class="lang-dot lang-js"></span> JavaScript</span>
@@ -185,7 +194,7 @@ done</div>
         </div>
       </div>
       <div class="repo-card">
-        <div class="repo-name">📦 fastemporal</div>
+        <div class="repo-name"><a href="https://github.com/BaselAshraf81/fastemporal" target="_blank"></a>📦 fastemporal</a></div>
         <div class="repo-desc">Luxon + Temporal in pure Rust — 40× faster, zero GC, 332 passing tests</div>
         <div class="repo-meta">
           <span><span class="lang-dot lang-rs"></span> Rust</span>

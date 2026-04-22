@@ -11,24 +11,21 @@ import { loadGltfFromDataUrl } from "@/lib/gltfLoader";
  * mesh without touching the source's material. Uses polygonOffset to float
  * the overlay just in front of the original surface in screen-space.
  *
- * The overlay is transparent — only pixels where the HTML canvas has alpha > 0
- * are visible. If the HTML panel has a solid background, the overlay covers
- * the mesh fully (expected). If the HTML has transparent regions (e.g.
- * background: transparent), the original GLTF material shows through.
+ * Fragments outside the 0→1 UV range (after the texture's offset/repeat/rotation
+ * transform) are discarded via a small shader patch, so the original GLTF
+ * material shows through wherever the HTML isn't mapped.
  */
 function createHtmlOverlay(
   sourceMesh: THREE.Mesh,
   texture: THREE.CanvasTexture,
   side: THREE.Side = THREE.FrontSide,
 ): THREE.Mesh {
-  // Ensure the texture preserves alpha from the canvas
   texture.premultiplyAlpha = false;
 
   const overlayMat = new THREE.MeshStandardMaterial({
     map: texture,
     color: "#ffffff",
     transparent: true,
-    alphaTest: 0.01,
     depthWrite: false,
     roughness: 0.95,
     metalness: 0,
@@ -37,6 +34,27 @@ function createHtmlOverlay(
     polygonOffsetUnits: -1,
     side,
   });
+
+  // Patch the shader to discard fragments outside the texture's UV region.
+  // After Three.js applies the texture matrix (offset/repeat/rotation/center),
+  // the transformed UV for "inside the texture" is 0→1. Anything outside that
+  // range means the fragment is on a part of the mesh not covered by the HTML.
+  overlayMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `
+      #ifdef USE_MAP
+        vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+        // Discard fragments outside the 0→1 UV range (after texture transform).
+        // This makes the overlay invisible where the HTML isn't mapped,
+        // letting the original 3D material show through.
+        if ( vMapUv.x < 0.0 || vMapUv.x > 1.0 || vMapUv.y < 0.0 || vMapUv.y > 1.0 ) discard;
+        diffuseColor *= sampledDiffuseColor;
+      #endif
+      `
+    );
+  };
+
   const overlay = new THREE.Mesh(sourceMesh.geometry, overlayMat);
   overlay.name = `${sourceMesh.name}__html_overlay`;
   overlay.position.set(0, 0, 0);

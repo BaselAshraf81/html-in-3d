@@ -292,11 +292,10 @@ export function generateStandaloneHtml(
     // (which captures at panel.width × panel.height) and the DOM layout.
     const sanitizedBodyStyle = bodyStyle
       .replace(/\b(width|height|overflow|min-width|min-height|max-width|max-height)\s*:[^;]*(;|$)/gi, "")
-      .replace(/\bbackground(-color|-image|-attachment|-clip|-origin|-position|-repeat|-size|-blend-mode)?\s*:[^;]*(;|$)/gi, "")
       .replace(/"/g, "&quot;");
     const styleAttr = sanitizedBodyStyle.trim()
-      ? `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:transparent;${sanitizedBodyStyle}"`
-      : `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:transparent;"`;
+      ? `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;${sanitizedBodyStyle}"`
+      : `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;"`;
     return `<canvas id="stg-${p.id}" class="staging" width="${p.width}" height="${p.height}" style="width:${p.width}px;height:${p.height}px;" layoutsubtree><div id="content-${p.id}" ${styleAttr}>${contentHtml}</div></canvas>`;
   }).join("\n");
 
@@ -601,13 +600,12 @@ function applyTextureToMesh(mesh, assignment, meshColor, isGltfMesh) {
   }
 
   // Create overlay mesh — original material is preserved.
-  // Transparent so the original GLTF material shows through where the
-  // HTML canvas has alpha=0 (no content drawn).
+  // Shader patch discards fragments outside the 0→1 UV range so the
+  // original 3D material shows through where the HTML isn't mapped.
   const overlayMat = new THREE.MeshStandardMaterial({
     color: '#ffffff',
     map: tex,
     transparent: true,
-    alphaTest: 0.01,
     depthWrite: false,
     roughness: 0.95,
     metalness: 0,
@@ -617,6 +615,18 @@ function applyTextureToMesh(mesh, assignment, meshColor, isGltfMesh) {
     side: Array.isArray(mesh.material) ? THREE.DoubleSide : (mesh.material.side ?? THREE.DoubleSide),
   });
   tex.premultiplyAlpha = false;
+
+  // Discard fragments outside the texture's UV region
+  overlayMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      '#ifdef USE_MAP\\n' +
+      '  vec4 sampledDiffuseColor = texture2D( map, vMapUv );\\n' +
+      '  if ( vMapUv.x < 0.0 || vMapUv.x > 1.0 || vMapUv.y < 0.0 || vMapUv.y > 1.0 ) discard;\\n' +
+      '  diffuseColor *= sampledDiffuseColor;\\n' +
+      '#endif'
+    );
+  };
 
   const overlayMesh = new THREE.Mesh(targetGeo, overlayMat);
   overlayMesh.name = (mesh.name || '') + '__html_overlay';
