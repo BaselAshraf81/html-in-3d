@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    padding: 24px;
+    height: 100vh;
+    overflow: hidden;
+  }
+  a { color: #4493f8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .profile { display: flex; gap: 24px; height: 100%; }
+  .sidebar { width: 280px; flex-shrink: 0; }
+  .main { flex: 1; min-width: 0; }
+
+  /* Avatar */
+  .avatar {
+    width: 260px; height: 260px;
+    border-radius: 50%;
+    border: 1px solid #30363d;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 80px; color: #4493f8;
+    margin-bottom: 16px;
+  }
+  .name { font-size: 24px; font-weight: 600; color: #e6edf3; }
+  .username { font-size: 18px; color: #8b949e; font-weight: 300; }
+  .bio {
+    margin-top: 12px; font-size: 14px; color: #8b949e;
+    font-family: 'Courier New', monospace;
+    background: #161b22; padding: 8px 12px; border-radius: 6px;
+    border: 1px solid #30363d; line-height: 1.5;
+  }
+  .edit-btn {
+    margin-top: 12px; width: 100%; padding: 5px 16px;
+    background: #21262d; border: 1px solid #30363d;
+    color: #e6edf3; border-radius: 6px; font-size: 14px;
+    cursor: pointer; font-weight: 500;
+  }
+  .edit-btn:hover { background: #30363d; }
+  .stats { margin-top: 12px; font-size: 14px; color: #8b949e; }
+  .stats strong { color: #e6edf3; }
+
+  .info-list { list-style: none; margin-top: 12px; }
+  .info-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0; font-size: 13px; color: #8b949e;
+  }
+  .info-list li svg { width: 16px; height: 16px; fill: #8b949e; flex-shrink: 0; }
+
+  /* Pinned repos */
+  .section-title { font-size: 16px; font-weight: 400; color: #e6edf3; margin-bottom: 12px; }
+  .pinned-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .repo-card {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    padding: 16px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .repo-card:hover { border-color: #4493f8; }
+  .repo-name { font-size: 14px; font-weight: 600; color: #4493f8; }
+  .repo-desc { font-size: 12px; color: #8b949e; line-height: 1.4; flex: 1; }
+  .repo-meta { display: flex; gap: 12px; font-size: 12px; color: #8b949e; align-items: center; }
+  .lang-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .lang-ts { background: #3178c6; }
+  .lang-py { background: #3572A5; }
+  .lang-rs { background: #dea584; }
+  .lang-js { background: #f1e05a; }
+
+  /* Contribution graph placeholder */
+  .contrib-section { margin-top: 20px; }
+  .contrib-header { font-size: 14px; color: #e6edf3; margin-bottom: 8px; }
+  .contrib-graph {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    padding: 12px; display: flex; gap: 2px; flex-wrap: wrap; align-items: flex-end;
+    height: 80px;
+  }
+  .contrib-col { display: flex; flex-direction: column; gap: 2px; }
+  .contrib-cell {
+    width: 10px; height: 10px; border-radius: 2px;
+    background: #161b22;
+  }
+  .contrib-cell.l1 { background: #0e4429; }
+  .contrib-cell.l2 { background: #006d32; }
+  .contrib-cell.l3 { background: #26a641; }
+  .contrib-cell.l4 { background: #39d353; }
+
+  /* Achievements */
+  .achievements { display: flex; gap: 8px; margin-top: 16px; }
+  .achievement {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: linear-gradient(135deg, #1a1a2e, #2d1b69);
+    border: 2px solid #30363d;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="profile">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="avatar">BA</div>
+    <div class="name">Basel Askar</div>
+    <div class="username">BaselAshraf81</div>
+    <div class="bio">for i in {1..100}; do
+    echo -ne "Processing: $i%\r"
+    sleep 50
+done</div>
+    <button class="edit-btn" onclick="this.textContent = this.textContent === 'Edit profile' ? '✓ Saved' : 'Edit profile'">Edit profile</button>
+    <div class="stats">
+      <a href="#"><strong>5</strong> followers</a> · <a href="#"><strong>23</strong> following</a>
+    </div>
+    <ul class="info-list">
+      <li>
+        <svg viewBox="0 0 16 16"><path d="M1.75 16A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0h8.5C11.216 0 12 .784 12 1.75v12.5c0 .085-.006.168-.018.25h2.268a.25.25 0 0 0 .25-.25V8.285a.25.25 0 0 0-.111-.208l-1.055-.703a.749.749 0 1 1 .832-1.248l1.055.703c.487.325.779.871.779 1.456v5.965A1.75 1.75 0 0 1 14.25 16h-3.5a.766.766 0 0 1-.197-.026c-.099.017-.2.026-.303.026h-3a.75.75 0 0 1-.75-.75V14h-1v1.25a.75.75 0 0 1-.75.75Z"/></svg>
+        AlertaCert
+      </li>
+      <li>
+        <svg viewBox="0 0 16 16"><path d="m7.775 3.275 1.25-1.25a3.5 3.5 0 1 1 4.95 4.95l-2.5 2.5a3.5 3.5 0 0 1-4.95 0 .751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018 1.998 1.998 0 0 0 2.83 0l2.5-2.5a2.002 2.002 0 0 0-2.83-2.83l-1.25 1.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042Z"/></svg>
+        <a href="https://www.linkedin.com/in/basel-askar/">linkedin.com/in/basel-askar</a>
+      </li>
+      <li>
+        <svg viewBox="0 0 16 16"><path d="M9.332 6.925 14.544 1h-1.235L8.783 6.145 5.17 1H1l5.466 7.78L1 14.993h1.235l4.78-5.433 3.816 5.433H15Z"/></svg>
+        <a href="https://x.com/Basel_Ashraf812">@Basel_Ashraf812</a>
+      </li>
+    </ul>
+    <div class="achievements">
+      <div class="achievement">⭐</div>
+      <div class="achievement">🎯</div>
+      <div class="achievement">⚡</div>
+      <div class="achievement">🦈</div>
+      <div class="achievement">👥</div>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="main">
+    <div class="section-title">Pinned</div>
+    <div class="pinned-grid">
+      <div class="repo-card">
+        <div class="repo-name">📦 layout-sans</div>
+        <div class="repo-desc">LayoutSans — Pure TypeScript 2D flex/grid layout engine powered by Pretext. Zero DOM. Zero WASM.</div>
+        <div class="repo-meta">
+          <span><span class="lang-dot lang-ts"></span> TypeScript</span>
+          <span>⭐ 58</span>
+          <span>🍴 2</span>
+        </div>
+      </div>
+      <div class="repo-card">
+        <div class="repo-name">📦 holystitch</div>
+        <div class="repo-desc">Instant Google Stitch → React conversion. Zero AI tokens.</div>
+        <div class="repo-meta">
+          <span><span class="lang-dot lang-ts"></span> TypeScript</span>
+          <span>⭐ 15</span>
+        </div>
+      </div>
+      <div class="repo-card">
+        <div class="repo-name">📦 vibellm</div>
+        <div class="repo-desc">LLM randomizer, generate random weights and structure.</div>
+        <div class="repo-meta">
+          <span><span class="lang-dot lang-py"></span> Python</span>
+          <span>⭐ 12</span>
+        </div>
+      </div>
+      <div class="repo-card">
+        <div class="repo-name">📦 threatalert</div>
+        <div class="repo-desc">Real-time threat intelligence monitoring platform.</div>
+        <div class="repo-meta">
+          <span><span class="lang-dot lang-ts"></span> TypeScript</span>
+          <span>⭐ 4</span>
+        </div>
+      </div>
+      <div class="repo-card">
+        <div class="repo-name">📦 fx-inject-shim</div>
+        <div class="repo-desc">Drop-in Firefox 152 compatibility shim for tabs/scripting injection APIs</div>
+        <div class="repo-meta">
+          <span><span class="lang-dot lang-js"></span> JavaScript</span>
+          <span>⭐ 1</span>
+        </div>
+      </div>
+      <div class="repo-card">
+        <div class="repo-name">📦 fastemporal</div>
+        <div class="repo-desc">Luxon + Temporal in pure Rust — 40× faster, zero GC, 332 passing tests</div>
+        <div class="repo-meta">
+          <span><span class="lang-dot lang-rs"></span> Rust</span>
+          <span>⭐ 1</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Contribution graph -->
+    <div class="contrib-section">
+      <div class="contrib-header"><strong id="contrib-count">976</strong> contributions in the last year</div>
+      <div class="contrib-graph" id="graph"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Generate contribution graph
+  const graph = document.getElementById('graph');
+  const levels = ['', 'l1', 'l2', 'l3', 'l4'];
+  // Seed-based pseudo-random for consistent look
+  let seed = 42;
+  function rand() { seed = (seed * 16807 + 0) % 2147483647; return seed / 2147483647; }
+
+  for (let w = 0; w < 52; w++) {
+    const col = document.createElement('div');
+    col.className = 'contrib-col';
+    for (let d = 0; d < 7; d++) {
+      const cell = document.createElement('div');
+      const r = rand();
+      let lvl = 0;
+      if (r > 0.7) lvl = 1;
+      if (r > 0.85) lvl = 2;
+      if (r > 0.92) lvl = 3;
+      if (r > 0.97) lvl = 4;
+      cell.className = 'contrib-cell' + (lvl ? ' ' + levels[lvl] : '');
+      col.appendChild(cell);
+    }
+    graph.appendChild(col);
+  }
+</script>
+</body>
+</html>

@@ -3,6 +3,8 @@ import { useStore, type GltfImportMode } from "@/store/useStore";
 import {
   fileToDataUrl,
   loadGltfFromDataUrl,
+  loadGltfFromFiles,
+  sceneToGlbDataUrl,
   discoverMeshNodes,
   isGltfFile,
 } from "@/lib/gltfLoader";
@@ -22,22 +24,45 @@ export default function GltfImportPanel() {
   const [importMode, setImportMode] = useState<GltfImportMode>("texturable");
 
   const handleImport = useCallback(
-    async (file: File) => {
-      if (!isGltfFile(file)) return;
+    async (files: FileList | File[]) => {
+      const fileArray = Array.from(files);
+      const gltfFile = fileArray.find((f) => isGltfFile(f));
+      if (!gltfFile) return;
       setIsLoading(true);
       try {
-        const dataUrl = await fileToDataUrl(file);
-        const gltf = await loadGltfFromDataUrl(dataUrl);
+        const ext = gltfFile.name.split(".").pop()?.toLowerCase();
+        let gltf;
+        let dataUrl = "";
+        let cleanup: (() => void) | undefined;
+
+        if (ext === "gltf" && fileArray.length > 1) {
+          // Multi-file .gltf — use companion files for .bin / textures
+          const siblings = fileArray.filter((f) => f !== gltfFile);
+          const result = await loadGltfFromFiles(gltfFile, siblings);
+          gltf = result.gltf;
+          cleanup = result.cleanup;
+          // For environment mode we need a self-contained data URL for re-loading.
+          // The raw .gltf JSON references external files (scene.bin, textures/*)
+          // that can't be resolved from a data URL. Re-export the parsed scene
+          // as a self-contained GLB so all resources are embedded.
+          if (importMode === "environment") {
+            dataUrl = await sceneToGlbDataUrl(gltf.scene);
+          }
+        } else {
+          // Self-contained .glb (or lone .gltf with embedded data)
+          dataUrl = await fileToDataUrl(gltfFile);
+          gltf = await loadGltfFromDataUrl(dataUrl);
+        }
+
         const meshNodes = discoverMeshNodes(gltf.scene);
         addGltfModel({
-          name: file.name.replace(/\.(glb|gltf)$/i, ""),
-          fileName: file.name,
-          // Environment mode keeps dataUrl so the GLTF can be re-loaded with textures.
-          // Texturable mode discards it — shell geometry is sufficient.
+          name: gltfFile.name.replace(/\.(glb|gltf)$/i, ""),
+          fileName: gltfFile.name,
           dataUrl: importMode === "environment" ? dataUrl : "",
           meshNodes,
           importMode,
         });
+        cleanup?.();
       } catch (err) {
         console.error("GLTF import failed:", err);
       } finally {
@@ -51,8 +76,8 @@ export default function GltfImportPanel() {
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleImport(file);
+      const files = e.dataTransfer.files;
+      if (files.length > 0) handleImport(files);
     },
     [handleImport]
   );
@@ -66,8 +91,8 @@ export default function GltfImportPanel() {
 
   const onFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleImport(file);
+      const files = e.target.files;
+      if (files && files.length > 0) handleImport(files);
       e.target.value = "";
     },
     [handleImport]
@@ -137,15 +162,16 @@ export default function GltfImportPanel() {
             {isLoading ? "hourglass_empty" : "cloud_upload"}
           </span>
           <p className="text-sm font-medium text-on-surface">
-            {isLoading ? "Loading..." : "Drop .GLB file here"}
+            {isLoading ? "Loading..." : "Drop .GLB / .GLTF files here"}
           </p>
           <p className="text-xs text-on-surface-variant mt-1">
-            or click to browse local files
+            or click to browse — select all files for .gltf
           </p>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".glb,.gltf"
+            accept=".glb,.gltf,.bin,.png,.jpg,.jpeg"
+            multiple
             onChange={onFileSelect}
             className="hidden"
           />

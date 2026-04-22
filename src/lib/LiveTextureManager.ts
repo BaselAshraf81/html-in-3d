@@ -155,10 +155,15 @@ export class LiveTextureManager {
     // that drawElementImage will capture.
     inst.contentElement.innerHTML = "";
     const wrapper = document.createElement("div");
-    wrapper.style.cssText = `width:${inst.width}px;height:${inst.height}px;overflow:hidden;position:relative;box-sizing:border-box;`;
-    // Apply body-level styles (background, color, font, etc.) to the wrapper
+    wrapper.style.cssText = `width:${inst.width}px;height:${inst.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:transparent;`;
+    // Apply body-level styles (color, font, etc.) to the wrapper.
+    // Strip any background properties — the wrapper must stay transparent
+    // so the canvas has alpha=0 where there's no content, allowing the
+    // overlay mesh to show the original 3D material through.
     if (prepared.bodyStyle) {
-      wrapper.style.cssText += prepared.bodyStyle;
+      const cleanedBodyStyle = prepared.bodyStyle
+        .replace(/\bbackground(-color|-image|-attachment|-clip|-origin|-position|-repeat|-size|-blend-mode)?\s*:[^;]*(;|$)/gi, "");
+      wrapper.style.cssText += cleanedBodyStyle;
     }
     wrapper.innerHTML = prepared.bodyHtml;
     inst.contentElement.appendChild(wrapper);

@@ -3,6 +3,7 @@ import { useStore } from "@/store/useStore";
 import {
   fileToDataUrl,
   loadGltfFromDataUrl,
+  loadGltfFromFiles,
   discoverMeshNodes,
   isGltfFile,
 } from "@/lib/gltfLoader";
@@ -17,19 +18,34 @@ export default function GltfDropZone({
   const [isDragOver, setIsDragOver] = useState(false);
 
   const handleImport = useCallback(
-    async (file: File) => {
-      if (!isGltfFile(file)) return;
+    async (files: FileList | File[]) => {
+      const fileArray = Array.from(files);
+      const gltfFile = fileArray.find((f) => isGltfFile(f));
+      if (!gltfFile) return;
       try {
-        const dataUrl = await fileToDataUrl(file);
-        const gltf = await loadGltfFromDataUrl(dataUrl);
+        const ext = gltfFile.name.split(".").pop()?.toLowerCase();
+        let gltf;
+        let cleanup: (() => void) | undefined;
+
+        if (ext === "gltf" && fileArray.length > 1) {
+          const siblings = fileArray.filter((f) => f !== gltfFile);
+          const result = await loadGltfFromFiles(gltfFile, siblings);
+          gltf = result.gltf;
+          cleanup = result.cleanup;
+        } else {
+          const dataUrl = await fileToDataUrl(gltfFile);
+          gltf = await loadGltfFromDataUrl(dataUrl);
+        }
+
         const meshNodes = discoverMeshNodes(gltf.scene);
-        // Shell geometry is extracted at import time — dataUrl is no longer needed
         addGltfModel({
-          name: file.name.replace(/\.(glb|gltf)$/i, ""),
-          fileName: file.name,
+          name: gltfFile.name.replace(/\.(glb|gltf)$/i, ""),
+          fileName: gltfFile.name,
           dataUrl: "",
           meshNodes,
+          importMode: "texturable",
         });
+        cleanup?.();
       } catch (err) {
         console.error("GLTF drop import failed:", err);
       }
@@ -41,8 +57,8 @@ export default function GltfDropZone({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleImport(file);
+      const files = e.dataTransfer.files;
+      if (files.length > 0) handleImport(files);
     },
     [handleImport]
   );

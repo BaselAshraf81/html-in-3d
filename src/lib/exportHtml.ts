@@ -132,10 +132,12 @@ function scopeStyleTag(styleTag: string, scopeSelector: string): string {
   return styleTag.replace(
     /(<style[^>]*>)([\s\S]*?)(<\/style>)/gi,
     (_m, open: string, css: string, close: string) => {
-      // Extract @import rules — they must be at the top, outside @scope
+      // Extract @import rules — they must be at the top, outside @scope.
+      // The regex handles url('...') and url("...") containing semicolons
+      // (e.g. Google Fonts: ?family=Inter:wght@400;500;600;700&display=swap)
       const imports: string[] = [];
-      const rest = css.replace(/@import\s+[^;]+;/g, (imp) => {
-        imports.push(imp);
+      const rest = css.replace(/@import\s+(?:url\(\s*['"]?[^)]*['"]?\s*\)|['"][^'"]*['"])[^;]*;/g, (imp) => {
+        imports.push(imp.trim());
         return "";
       });
       const importBlock = imports.length ? imports.join("\n") + "\n" : "";
@@ -290,10 +292,11 @@ export function generateStandaloneHtml(
     // (which captures at panel.width × panel.height) and the DOM layout.
     const sanitizedBodyStyle = bodyStyle
       .replace(/\b(width|height|overflow|min-width|min-height|max-width|max-height)\s*:[^;]*(;|$)/gi, "")
+      .replace(/\bbackground(-color|-image|-attachment|-clip|-origin|-position|-repeat|-size|-blend-mode)?\s*:[^;]*(;|$)/gi, "")
       .replace(/"/g, "&quot;");
     const styleAttr = sanitizedBodyStyle.trim()
-      ? `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;${sanitizedBodyStyle}"`
-      : `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;"`;
+      ? `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:transparent;${sanitizedBodyStyle}"`
+      : `style="width:${p.width}px;height:${p.height}px;overflow:hidden;position:relative;box-sizing:border-box;background:transparent;"`;
     return `<canvas id="stg-${p.id}" class="staging" width="${p.width}" height="${p.height}" style="width:${p.width}px;height:${p.height}px;" layoutsubtree><div id="content-${p.id}" ${styleAttr}>${contentHtml}</div></canvas>`;
   }).join("\n");
 
@@ -348,12 +351,16 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#f7f9fb');
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 2000);
 camera.position.set(5, 4, 5);
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.1;
+controls.minDistance = 0.1;
+controls.maxDistance = 500;
+controls.panSpeed = 1.5;
+controls.zoomSpeed = 1.2;
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 const dirLight = new THREE.DirectionalLight(0xffffff, 1);
@@ -574,36 +581,65 @@ function applyTextureToMesh(mesh, assignment, meshColor, isGltfMesh) {
   const tex = makeAssignmentTexture(assignment.panelId, assignment);
   if (!tex) return;
 
-  // GLTF meshes: always use original UVs (matches preview behavior — GltfSceneObjects
-  // never calls applyPlanarProjection, it just sets the texture on the existing material).
+  // GLTF meshes: always use original UVs (matches preview behavior).
   // Primitives: use planar projection when mappingMode === 'projected'.
   const useProjection = assignment.mappingMode === 'projected' && !isGltfMesh;
 
+  let targetGeo = mesh.geometry;
   if (useProjection) {
     const srcGeo = mesh.geometry;
     const { geo: projGeo, hasFrontBack } = applyPlanarProjection(srcGeo);
     mesh.geometry = projGeo;
-    const frontMat = new THREE.MeshStandardMaterial({
-      color: '#ffffff', map: tex, roughness: 0.3, metalness: 0.05, side: THREE.DoubleSide,
-    });
+    targetGeo = projGeo;
     if (hasFrontBack) {
+      // Add back-face material for projected primitives
       const backMat = new THREE.MeshStandardMaterial({
         color: meshColor || '#e1e9ee', roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide,
       });
-      mesh.material = [frontMat, backMat];
-    } else {
-      mesh.material = frontMat;
+      mesh.material = [mesh.material, backMat];
     }
-  } else {
-    mesh.material = new THREE.MeshStandardMaterial({
-      color: '#ffffff', map: tex, roughness: 0.3, metalness: 0.05, side: THREE.DoubleSide,
-    });
   }
+
+  // Create overlay mesh — original material is preserved.
+  // Transparent so the original GLTF material shows through where the
+  // HTML canvas has alpha=0 (no content drawn).
+  const overlayMat = new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    map: tex,
+    transparent: true,
+    alphaTest: 0.01,
+    depthWrite: false,
+    roughness: 0.95,
+    metalness: 0,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+    side: Array.isArray(mesh.material) ? THREE.DoubleSide : (mesh.material.side ?? THREE.DoubleSide),
+  });
+  tex.premultiplyAlpha = false;
+
+  const overlayMesh = new THREE.Mesh(targetGeo, overlayMat);
+  overlayMesh.name = (mesh.name || '') + '__html_overlay';
+  overlayMesh.position.set(0, 0, 0);
+  overlayMesh.rotation.set(0, 0, 0);
+  overlayMesh.scale.set(1, 1, 1);
+  overlayMesh.renderOrder = 1;
+
+  // For projected geometry with front/back groups, only show texture on front
+  if (useProjection && targetGeo.groups.length > 1) {
+    const invisMat = new THREE.MeshStandardMaterial({ visible: false });
+    overlayMesh.material = [overlayMat, invisMat];
+  }
+
+  mesh.add(overlayMesh);
+
+  // Register the OVERLAY mesh for interactivity — raycaster hits the overlay
+  // and reads hitMat.map to get the texture with correct UV transforms
   const info = interactiveMap.get(assignment.panelId);
   if (info) {
-    info.meshes.push(mesh);
-    info.meshAssignments.set(mesh, assignment);
-    info.meshIsGltf.set(mesh, isGltfMesh);
+    info.meshes.push(overlayMesh);
+    info.meshAssignments.set(overlayMesh, assignment);
+    info.meshIsGltf.set(overlayMesh, isGltfMesh);
   }
 }
 
@@ -703,13 +739,7 @@ Promise.all(gltfLoadPromises).then(() => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Interactivity: Raycasting → UV → Hit-test
-//
-// To use elementFromPoint we temporarily:
-//  1. Move staging container to top-left and expand it
-//  2. Remove overflow:hidden
-//  3. Hide the render canvas so it does not occlude staging content
-//  4. Call elementFromPoint, then restore everything
+// Interactivity: Raycasting → UV → texture.matrix → pixel → DOM hit-test
 // ═══════════════════════════════════════════════════════════════════════════
 
 const raycaster = new THREE.Raycaster();
@@ -717,7 +747,6 @@ const pointer = new THREE.Vector2();
 const stagingContainer = document.getElementById('staging-container');
 
 let _downX = 0, _downY = 0, _downTime = 0;
-let _clickId = 0;
 canvas.addEventListener('pointerdown', (e) => {
   _downX = e.clientX; _downY = e.clientY; _downTime = performance.now();
 });
@@ -726,12 +755,7 @@ canvas.addEventListener('pointerup', (e) => {
   const dy = e.clientY - _downY;
   const dist = Math.sqrt(dx * dx + dy * dy);
   const elapsed = performance.now() - _downTime;
-  _clickId++;
-  const cid = _clickId;
-  if (dist > 8 || elapsed > 600) {
-    console.log('[click:' + cid + '] REJECTED drag dist=' + dist.toFixed(1) + ' elapsed=' + elapsed.toFixed(0) + 'ms');
-    return;
-  }
+  if (dist > 8 || elapsed > 600) return;
 
   const rect = canvas.getBoundingClientRect();
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -742,17 +766,10 @@ canvas.addEventListener('pointerup', (e) => {
 
   raycaster.setFromCamera(pointer, camera);
   const intersects = raycaster.intersectObjects(allMeshes, false);
-  if (intersects.length === 0) {
-    console.log('[click:' + cid + '] NO HIT meshCount=' + allMeshes.length);
-    return;
-  }
+  if (intersects.length === 0) return;
 
   const hit = intersects[0];
-  if (!hit.uv) {
-    console.log('[click:' + cid + '] HIT but NO UV on', hit.object.name);
-    return;
-  }
-  console.log('[click:' + cid + '] HIT', hit.object.name, 'rawUV=(' + hit.uv.x.toFixed(3) + ',' + hit.uv.y.toFixed(3) + ')');
+  if (!hit.uv) return;
 
   for (const [panelId, info] of interactiveMap.entries()) {
     if (!info.meshes.includes(hit.object)) continue;
@@ -786,8 +803,6 @@ canvas.addEventListener('pointerup', (e) => {
       _uvY = isGltf ? hit.uv.y * info.height : (1 - hit.uv.y) * info.height;
     }
 
-    console.log('[click:' + cid + '] px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
-
     // Clamp to content bounds
     if (_uvX < 0 || _uvX >= info.width || _uvY < 0 || _uvY >= info.height) break;
 
@@ -817,10 +832,7 @@ canvas.addEventListener('pointerup', (e) => {
       sliderRect = { left: ir.left - canvasRect.left, width: ir.width };
     }
 
-    if (!targetEl) {
-      console.log('[click:' + cid + '] NO TARGET at px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
-      break;
-    }
+    if (!targetEl) break;
 
     // If we hit a non-interactive container, try to find the nearest interactive
     // element: first check children (e.g. a button inside a clicked div),
@@ -843,7 +855,6 @@ canvas.addEventListener('pointerup', (e) => {
     }
 
     const tag = finalTarget.tagName;
-    console.log('[click:' + cid + '] TARGET ' + tag + '#' + (finalTarget.id||'') + '.' + (finalTarget.className||'').toString().split(' ')[0] + ' px=(' + _uvX.toFixed(0) + ',' + _uvY.toFixed(0) + ')');
 
     // Use composed:true MouseEvent with real coordinates for all dispatches.
     // Real coordinates are critical: Chrome's composited scroll layers inside
@@ -856,7 +867,6 @@ canvas.addEventListener('pointerup', (e) => {
 
     if (tag === 'BUTTON' || (tag === 'INPUT' && finalTarget.type === 'submit')) {
       finalTarget.dispatchEvent(synClick);
-      console.log('[click:' + cid + '] → button dispatch');
     } else if (tag === 'INPUT' && finalTarget.type === 'checkbox') {
       finalTarget.checked = !finalTarget.checked;
       finalTarget.dispatchEvent(new Event('change', { bubbles: true }));
@@ -882,7 +892,6 @@ canvas.addEventListener('pointerup', (e) => {
       finalTarget.dispatchEvent(synClick);
     } else {
       finalTarget.dispatchEvent(synClick);
-      console.log('[click:' + cid + '] → generic dispatch');
     }
 
     try { stgCanvas.requestPaint?.(); } catch(_) {}
@@ -890,7 +899,6 @@ canvas.addEventListener('pointerup', (e) => {
     if (document.activeElement && stagingContainer.contains(document.activeElement)) {
       document.activeElement.blur();
     }
-    console.log('[click:' + cid + '] → requestPaint done');
     break;
   }
 });
