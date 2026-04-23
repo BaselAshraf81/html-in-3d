@@ -2,7 +2,6 @@
 
 <video src="demo.mp4" controls muted width="100%"></video>
 
-A 3D studio for rendering live HTML content as textures on 3D meshes using the [HTML-in-Canvas API](https://github.com/nicbarker/html-in-canvas).
 
 ## Requirements
 
